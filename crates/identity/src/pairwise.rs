@@ -6,10 +6,8 @@
 
 use x25519_dalek::{StaticSecret, PublicKey as X25519PublicKey};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use kyber::KemPublicKey;
 use shadowgram_crypto::kdf::KeyDerivation;
 use crate::identity::{Identity, PublicIdentity};
-use zeroize::Zeroize;
 use serde::{Serialize, Deserialize};
 
 /// Pairwise identity derived for a specific contact
@@ -48,7 +46,7 @@ impl PairwiseIdentity {
             &[our_fp, their_fp, b"ed25519"].concat(),
             b"shadowgram-pairwise-ed",
         );
-        let ed25519_secret = SigningKey::from_bytes(ed_seed);
+        let ed25519_secret = SigningKey::from_bytes(&ed_seed);
         let ed25519_public = ed25519_secret.verifying_key();
 
         Self {
@@ -86,13 +84,6 @@ impl PairwiseIdentity {
         data.extend_from_slice(self.x25519_public.as_bytes());
         data.extend_from_slice(self.ed25519_public.as_bytes());
         data
-    }
-}
-
-impl Drop for PairwiseIdentity {
-    fn drop(&mut self) {
-        self.x25519_secret.zeroize();
-        self.ed25519_secret.zeroize();
     }
 }
 

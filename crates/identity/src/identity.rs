@@ -9,12 +9,12 @@
 
 use x25519_dalek::{StaticSecret as X25519Secret, PublicKey as X25519PublicKey};
 use ed25519_dalek::{SigningKey as Ed25519Secret, VerifyingKey as Ed25519PublicKey, Signature};
-use kyber::{KemPublicKey, KemSecretKey};
-use rand::rngs::OsRng;
+use ml_kem::{MlKem768, DecapsulationKey, EncapsulationKey, KeyExport};
+use ed25519_dalek::Verifier;
 use serde::{Serialize, Deserialize};
+use base64::prelude::*;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use thiserror::Error;
-use sha2::{Sha256, Digest};
 use blake3::Hasher as Blake3Hasher;
 
 /// Identity generation errors
@@ -40,33 +40,34 @@ pub struct IdentityKeys {
     x25519_secret: X25519Secret,
 
     /// Ed25519 secret key for signing
+    #[zeroize(skip)]
     ed25519_secret: Ed25519Secret,
 
     /// ML-KEM secret key for PQ security
     #[zeroize(skip)]
-    kyber_secret: KemSecretKey,
+    mlkem_decapsulation_key: DecapsulationKey<MlKem768>,
 }
 
 impl IdentityKeys {
     /// Generate a new identity keypair
     pub fn generate() -> Result<Self, IdentityError> {
+        let mut rng = rand::rngs::OsRng;
+
         // X25519 keypair
-        let x25519_secret = X25519Secret::from_bytes(
-            OsRng.gen::<[u8; 32]>()
-        );
+        let x25519_secret = X25519Secret::random_from_rng(&mut rng);
 
         // Ed25519 keypair
-        let ed25519_secret = Ed25519Secret::from_bytes(
-            &OsRng.gen::<[u8; 32]>()
-        );
+        let ed25519_secret = Ed25519Secret::generate(&mut rng);
 
         // ML-KEM keypair
-        let (_kyber_public, kyber_secret) = KemPublicKey::generate();
+        let mut seed = [0u8; 64];
+        rand::RngCore::fill_bytes(&mut rng, &mut seed);
+        let mlkem_decapsulation_key = DecapsulationKey::<MlKem768>::from_seed(seed.into());
 
         Ok(Self {
             x25519_secret,
             ed25519_secret,
-            kyber_secret,
+            mlkem_decapsulation_key,
         })
     }
 
@@ -81,8 +82,8 @@ impl IdentityKeys {
     }
 
     /// Get ML-KEM public key
-    pub fn kyber_public(&self) -> &KemPublicKey {
-        &self.kyber_secret.public_key()
+    pub fn mlkem_encapsulation_key(&self) -> EncapsulationKey<MlKem768> {
+        self.mlkem_decapsulation_key.encapsulation_key().clone()
     }
 
     /// Sign a message
@@ -97,7 +98,8 @@ impl IdentityKeys {
         self.ed25519_secret
             .verifying_key()
             .verify(message, signature)
-            .map_err(|_| IdentityError::SignatureVerificationFailed)
+            .map_err(|_| IdentityError::SignatureVerificationFailed)?;
+        Ok(true)
     }
 }
 
@@ -111,7 +113,7 @@ pub struct PublicIdentity {
     pub ed25519_public: String,
 
     /// ML-KEM public key (base64)
-    pub kyber_public: String,
+    pub mlkem_public: String,
 
     /// Identity fingerprint (BLAKE3 hash, 8 chars for display)
     pub fingerprint_short: String,
@@ -128,19 +130,17 @@ impl PublicIdentity {
     pub fn from_keys(keys: &IdentityKeys) -> Result<Self, IdentityError> {
         let x25519_public = keys.x25519_public();
         let ed25519_public = keys.ed25519_public();
-        let kyber_public = keys.kyber_public();
+        let mlkem_public = keys.mlkem_encapsulation_key();
 
         // Create fingerprint from all public keys
         let mut hasher = Blake3Hasher::new();
         hasher.update(x25519_public.as_bytes());
         hasher.update(ed25519_public.as_bytes());
-        hasher.update(bincode::serialize(kyber_public)
-            .map_err(|e| IdentityError::SerializationError(e.to_string()))?
-            .as_slice());
+        hasher.update(&mlkem_public.to_bytes());
         let fingerprint = hasher.finalize();
 
         let fingerprint_full = hex::encode(fingerprint.as_bytes());
-        let fingerprint_short = base64::encode(&fingerprint.as_bytes()[..6])
+        let fingerprint_short = BASE64_STANDARD.encode(&fingerprint.as_bytes()[..6])
             .chars()
             .take(8)
             .collect();
@@ -149,18 +149,15 @@ impl PublicIdentity {
         let mut signable = Vec::new();
         signable.extend_from_slice(x25519_public.as_bytes());
         signable.extend_from_slice(ed25519_public.as_bytes());
-        signable.extend_from_slice(kyber_public.as_bytes());
+        signable.extend_from_slice(&mlkem_public.to_bytes());
 
         let signature = keys.sign(&signable);
-        let self_signature = base64::encode(signature.to_bytes());
+        let self_signature = BASE64_STANDARD.encode(signature.to_bytes());
 
         Ok(Self {
-            x25519_public: base64::encode(x25519_public.as_bytes()),
-            ed25519_public: base64::encode(ed25519_public.as_bytes()),
-            kyber_public: base64::encode(
-                bincode::serialize(kyber_public)
-                    .map_err(|e| IdentityError::SerializationError(e.to_string()))?
-            ),
+            x25519_public: BASE64_STANDARD.encode(x25519_public.as_bytes()),
+            ed25519_public: BASE64_STANDARD.encode(ed25519_public.as_bytes()),
+            mlkem_public: BASE64_STANDARD.encode(mlkem_public.to_bytes()),
             fingerprint_short,
             fingerprint_full,
             self_signature,
@@ -169,26 +166,27 @@ impl PublicIdentity {
 
     /// Verify the self-signature
     pub fn verify_self_signature(&self) -> Result<bool, IdentityError> {
-        let x25519_bytes = base64::decode(&self.x25519_public)
+        let x25519_bytes = BASE64_STANDARD.decode(&self.x25519_public)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
-        let ed25519_bytes = base64::decode(&self.ed25519_public)
+        let ed25519_bytes = BASE64_STANDARD.decode(&self.ed25519_public)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
-        let kyber_bytes = base64::decode(&self.kyber_public)
+        let mlkem_bytes = BASE64_STANDARD.decode(&self.mlkem_public)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
 
-        let signature_bytes = base64::decode(&self.self_signature)
+        let signature_bytes = BASE64_STANDARD.decode(&self.self_signature)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
-        let signature = Signature::from_slice(&signature_bytes);
+        let signature = Signature::from_slice(&signature_bytes)
+            .map_err(|_| IdentityError::InvalidFormat("Invalid signature length".into()))?;
 
         let ed25519_public = Ed25519PublicKey::from_bytes(
             &ed25519_bytes.try_into()
                 .map_err(|_| IdentityError::InvalidFormat("Wrong Ed25519 key length".into()))?
-        );
+        ).map_err(|_| IdentityError::InvalidFormat("Invalid Ed25519 public key".into()))?;
 
         let mut signable = Vec::new();
         signable.extend_from_slice(&x25519_bytes);
         signable.extend_from_slice(&ed25519_bytes);
-        signable.extend_from_slice(&kyber_bytes);
+        signable.extend_from_slice(&mlkem_bytes);
 
         ed25519_public
             .verify(&signable, &signature)
@@ -274,16 +272,22 @@ impl Identity {
         self.rotated_at
     }
 
+    /// Get creation timestamp
+    pub fn created_at(&self) -> u64 {
+        self.created_at
+    }
+
     /// Check if identity should be rotated
     pub fn should_rotate(&self, policy: &RotationPolicy) -> bool {
         policy.should_rotate(self.created_at, self.rotated_at)
     }
 
     /// Serialize identity for secure storage
-    pub fn serialize_encrypted(&self, encryption_key: &[u8; 32]) -> Result<Vec<u8>, IdentityError> {
+    pub fn serialize_encrypted(&self, _encryption_key: &[u8; 32]) -> Result<Vec<u8>, IdentityError> {
         // Serialize keys (would be encrypted in production)
         let mut data = Vec::new();
-        data.extend(bincode::serialize(&self.public)?);
+        data.extend(bincode::serialize(&self.public)
+            .map_err(|e| IdentityError::SerializationError(e.to_string()))?);
         // In production: encrypt private keys before storage
         Ok(data)
     }
@@ -298,10 +302,10 @@ impl Drop for Identity {
 /// Rotation policy for identity keys
 pub struct RotationPolicy {
     /// Rotate after this many seconds
-    rotation_interval: u64,
+    pub rotation_interval: u64,
 
     /// Warn before rotation (seconds)
-    warning_threshold: u64,
+    pub warning_threshold: u64,
 }
 
 impl RotationPolicy {

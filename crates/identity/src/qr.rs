@@ -50,7 +50,7 @@ impl QrCode {
         qr_data.extend_from_slice(&data);
 
         // Generate QR code with high error correction
-        let image = QrImage::with_error_correction(
+        let image = QrImage::with_error_correction_level(
             &qr_data,
             EcLevel::H, // High error correction (up to 30% damage)
         ).map_err(|e| QrError::EncodingFailed(e.to_string()))?;
@@ -62,7 +62,7 @@ impl QrCode {
     }
 
     /// Parse QR code from image data
-    pub fn from_image(image_bytes: &[u8]) -> Result<Vec<u8>, QrError> {
+    pub fn from_image(_image_bytes: &[u8]) -> Result<Vec<u8>, QrError> {
         // In a real implementation, this would use a QR decoder
         // like zbar or quirc. For now, placeholder.
         //
@@ -92,7 +92,6 @@ impl QrCode {
                 let pixel_color = match color {
                     Color::Light => Rgb(light),
                     Color::Dark => Rgb(dark),
-                    _ => Rgb(light),
                 };
 
                 // Scale up each module

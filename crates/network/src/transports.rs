@@ -200,13 +200,13 @@ impl HttpPollTransport {
 
     /// Encode as HTTP-compatible payload (base64)
     fn encode_http(&self, data: &[u8]) -> Bytes {
-        let encoded = base64::encode(data);
+        let encoded = base64::prelude::BASE64_STANDARD.encode(data);
         Bytes::from(encoded)
     }
 
     /// Decode from base64
     fn decode_http(&self, frame: &[u8]) -> Result<Bytes, TransportError> {
-        let decoded = base64::decode(frame)
+        let decoded = base64::prelude::BASE64_STANDARD.decode(frame)
             .map_err(|e| TransportError::DecodingError(e.to_string()))?;
         Ok(Bytes::from(decoded))
     }

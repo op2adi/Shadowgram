@@ -8,9 +8,11 @@
 
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 use ml_kem::{MlKem768, EncapsulationKey, DecapsulationKey, Ciphertext, SharedKey};
-use ml_kem::kem::{Encapsulate, Decapsulate, Kem, KeyExport};
+
+use ml_kem::kem::{Decapsulate, KeyExport};
 use rand::rngs::OsRng;
 use serde::{Serialize, Deserialize};
+use base64::prelude::*;
 use zeroize::Zeroize;
 use thiserror::Error;
 
@@ -76,7 +78,10 @@ pub struct MlKemKeypair {
 impl MlKemKeypair {
     /// Generate a new ML-KEM-768 keypair
     pub fn generate() -> Self {
-        let (decapsulation_key, encapsulation_key) = MlKem768::generate();
+        let mut seed = [0u8; 64];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        let decapsulation_key = DecapsulationKey::<MlKem768>::from_seed(seed.into());
+        let encapsulation_key = decapsulation_key.encapsulation_key().clone();
         Self {
             encapsulation_key,
             decapsulation_key,
@@ -95,7 +100,9 @@ impl MlKemKeypair {
 
     /// Encapsulate a shared key to this keypair
     pub fn encapsulate(&self) -> Result<(Ciphertext<MlKem768>, [u8; 32]), KeyExchangeError> {
-        let (ct, shared) = self.encapsulation_key.encapsulate();
+        let mut m = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut m);
+        let (ct, shared) = self.encapsulation_key.encapsulate_deterministic(&m.into());
         Ok((ct, shared.into()))
     }
 
@@ -128,7 +135,10 @@ impl HybridKeypair {
         let x25519_public = X25519PublicKey::from(&x25519_secret);
 
         // Generate ML-KEM keypair for decapsulation
-        let (mlkem_decapsulation_key, mlkem_encapsulation_key) = MlKem768::generate();
+        let mut seed = [0u8; 64];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        let mlkem_decapsulation_key = DecapsulationKey::<MlKem768>::from_seed(seed.into());
+        let mlkem_encapsulation_key = mlkem_decapsulation_key.encapsulation_key().clone();
 
         Self {
             x25519_secret: Some(x25519_secret),
@@ -187,10 +197,11 @@ impl Drop for HybridKeypair {
 
 /// Responder's hybrid key exchange state
 pub struct HybridResponder {
-    x25519_secret: Option<EphemeralSecret>,
-    mlkem_decapsulation_key: Option<DecapsulationKey<MlKem768>>,
+    x25519_public: X25519PublicKey,
+    _mlkem_decapsulation_key: Option<DecapsulationKey<MlKem768>>,
     mlkem_encapsulation_key: EncapsulationKey<MlKem768>,
     mlkem_ciphertext: Ciphertext<MlKem768>,
+    shared_secret: SharedSecret,
 }
 
 impl HybridResponder {
@@ -207,11 +218,16 @@ impl HybridResponder {
         let x25519_shared = x25519_secret.diffie_hellman(initiator_x25519_public);
 
         // Generate ML-KEM keypair
-        let (mlkem_decapsulation_key, mlkem_encapsulation_key) = MlKem768::generate();
+        let mut seed = [0u8; 64];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        let mlkem_decapsulation_key = DecapsulationKey::<MlKem768>::from_seed(seed.into());
+        let mlkem_encapsulation_key = mlkem_decapsulation_key.encapsulation_key().clone();
 
         // Encapsulate to initiator's ML-KEM public key
+        let mut m = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut m);
         let (mlkem_ciphertext, mlkem_shared) = initiator_mlkem_encapsulation_key
-            .encapsulate();
+            .encapsulate_deterministic(&m.into());
 
         // Combine shared secrets
         let mut combined = [0u8; 64];
@@ -219,10 +235,11 @@ impl HybridResponder {
         combined[32..].copy_from_slice(mlkem_shared.as_ref());
 
         let responder = Self {
-            x25519_secret: Some(x25519_secret),
-            mlkem_decapsulation_key: Some(mlkem_decapsulation_key),
+            x25519_public,
+            _mlkem_decapsulation_key: Some(mlkem_decapsulation_key),
             mlkem_encapsulation_key,
             mlkem_ciphertext: mlkem_ciphertext.clone(),
+            shared_secret: SharedSecret::new(combined),
         };
 
         Ok((responder, mlkem_ciphertext, x25519_public))
@@ -235,20 +252,17 @@ impl HybridResponder {
 
     /// Get X25519 public key to send
     pub fn x25519_public(&self) -> X25519PublicKey {
-        X25519PublicKey::from(self.x25519_secret.as_ref().unwrap())
+        self.x25519_public
     }
 
     /// Get ML-KEM encapsulation (public) key
     pub fn mlkem_encapsulation_key(&self) -> &EncapsulationKey<MlKem768> {
         &self.mlkem_encapsulation_key
     }
-}
 
-impl Drop for HybridResponder {
-    fn drop(&mut self) {
-        if let Some(ref mut secret) = self.x25519_secret {
-            secret.zeroize();
-        }
+    /// Get the computed shared secret
+    pub fn shared_secret(&self) -> &SharedSecret {
+        &self.shared_secret
     }
 }
 
@@ -293,8 +307,8 @@ impl KeyExchangeMessage {
         mlkem_encapsulation_key: &EncapsulationKey<MlKem768>,
     ) -> Self {
         Self {
-            x25519_public: base64::encode(x25519_public.as_bytes()),
-            mlkem_encapsulation_key: base64::encode(mlkem_encapsulation_key.to_bytes()),
+            x25519_public: BASE64_STANDARD.encode(x25519_public.as_bytes()),
+            mlkem_encapsulation_key: BASE64_STANDARD.encode(mlkem_encapsulation_key.to_bytes()),
             mlkem_ciphertext: None,
         }
     }
@@ -305,15 +319,15 @@ impl KeyExchangeMessage {
         ciphertext: &Ciphertext<MlKem768>,
     ) -> Self {
         Self {
-            x25519_public: base64::encode(x25519_public.as_bytes()),
-            mlkem_encapsulation_key: base64::encode(mlkem_encapsulation_key.to_bytes()),
-            mlkem_ciphertext: Some(base64::encode(ciphertext.as_bytes())),
+            x25519_public: BASE64_STANDARD.encode(x25519_public.as_bytes()),
+            mlkem_encapsulation_key: BASE64_STANDARD.encode(mlkem_encapsulation_key.to_bytes()),
+            mlkem_ciphertext: Some(BASE64_STANDARD.encode(ciphertext.as_slice())),
         }
     }
 
     /// Parse initiator's X25519 public key
     pub fn parse_initiator_x25519(&self) -> Result<X25519PublicKey, KeyExchangeError> {
-        let bytes: [u8; 32] = base64::decode(&self.x25519_public)
+        let bytes: [u8; 32] = BASE64_STANDARD.decode(&self.x25519_public)
             .map_err(|e| KeyExchangeError::InvalidPublicKey(e.to_string()))?
             .try_into()
             .map_err(|_| KeyExchangeError::InvalidPublicKey("Wrong length".into()))?;
@@ -322,20 +336,19 @@ impl KeyExchangeMessage {
 
     /// Parse initiator's ML-KEM encapsulation key
     pub fn parse_initiator_mlkem_key(&self) -> Result<EncapsulationKey<MlKem768>, KeyExchangeError> {
-        let bytes = base64::decode(&self.mlkem_encapsulation_key)
+        let bytes = BASE64_STANDARD.decode(&self.mlkem_encapsulation_key)
             .map_err(|e| KeyExchangeError::InvalidPublicKey(e.to_string()))?;
-        let bytes_array: [u8; 1568] = bytes
+        let bytes_array: [u8; 1184] = bytes
             .try_into()
             .map_err(|_| KeyExchangeError::InvalidPublicKey("Wrong ML-KEM key length".into()))?;
-        // Convert raw bytes to Key type using From trait
-        let key: ml_kem::Key<MlKem768> = bytes_array.into();
-        EncapsulationKey::new(&key)
-            .map_err(|e| KeyExchangeError::InvalidPublicKey(e.to_string()))
+        
+        EncapsulationKey::<MlKem768>::new(&bytes_array.into())
+            .map_err(|_| KeyExchangeError::InvalidPublicKey("Invalid ML-KEM key".into()))
     }
 
     /// Parse responder's ML-KEM ciphertext
     pub fn parse_responder_ciphertext(&self) -> Result<Ciphertext<MlKem768>, KeyExchangeError> {
-        let bytes = base64::decode(self.mlkem_ciphertext.as_ref()
+        let bytes = BASE64_STANDARD.decode(self.mlkem_ciphertext.as_ref()
             .ok_or_else(|| KeyExchangeError::InvalidPublicKey("No ciphertext".into()))?)
             .map_err(|e| KeyExchangeError::InvalidPublicKey(e.to_string()))?;
         let bytes_array: [u8; 1088] = bytes

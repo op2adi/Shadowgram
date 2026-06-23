@@ -281,7 +281,7 @@ impl ContactExport {
         Self {
             fingerprint: contact.fingerprint.clone(),
             alias: contact.alias.clone(),
-            public_identity: base64::encode(&contact.public_identity),
+            public_identity: base64::prelude::BASE64_STANDARD.encode(&contact.public_identity),
             trust_level: contact.trust_level as u8,
         }
     }

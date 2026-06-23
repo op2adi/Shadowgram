@@ -23,4 +23,5 @@ pub use identity::{Identity, IdentityKeys, PublicIdentity, IdentityError};
 pub use pairwise::PairwiseIdentity;
 pub use qr::{QrCode, QrError};
 pub use threshold::{SecretShare, ThresholdConfig, ShareError};
-pub use rotation::{RotationPolicy, RotationScheduler};
+pub use identity::RotationPolicy;
+pub use rotation::RotationScheduler;

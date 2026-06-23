@@ -294,16 +294,15 @@ impl DoubleRatchet {
             // This is an old/out-of-order message
             // Check if we have a skipped key for this
             let key = (remote_dh, header.counter);
-            if let Some(mk) = self.skipped_keys.get(&key) {
-                mk.clone()
+            if let Some(mk) = self.skipped_keys.remove(&key) {
+                mk
             } else {
                 // Need to derive skipped keys up to this point
                 self.derive_skipped_keys(remote_dh, header.counter)?;
-                self.skipped_keys.get(&key)
+                self.skipped_keys.remove(&key)
                     .ok_or(RatchetError::TooManySkipped {
                         count: self.skipped_keys.len()
                     })?
-                    .clone()
             }
         } else {
             // Normal in-order message - advance chain

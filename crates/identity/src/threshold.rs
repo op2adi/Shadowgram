@@ -98,7 +98,7 @@ impl ShamirSecretSharing {
     /// # Returns
     /// Vector of `total` shares
     pub fn split(secret: &[u8], threshold: u8, total: u8) -> Result<Vec<SecretShare>, ShareError> {
-        let config = ThresholdConfig::new(threshold, total)?;
+        let _config = ThresholdConfig::new(threshold, total)?;
 
         let mut shares = Vec::with_capacity(total as usize);
 

@@ -4752,12 +4752,16 @@ name = "shadowgram-identity"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bincode 1.3.3",
+ "blake3",
  "ed25519-dalek",
  "hex",
  "image",
+ "ml-kem",
  "qrcode",
  "rand 0.8.6",
  "serde",
+ "sha2",
  "shadowgram-crypto",
  "thiserror 1.0.69",
  "threshold-secret-sharing",

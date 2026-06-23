@@ -12,12 +12,12 @@
 
 | # | Goal | Status |
 |---|------|--------|
-| 1 | Fix compilation errors | 🟡 In Progress |
+| 1 | Fix compilation errors | 🟡 In Progress (Crypto fixes done) |
 | 2 | Resolve dependency versions | ✅ Done |
 | 3 | Integrate openmls for group chat | ⏳ Pending |
 | 4 | Complete Tor connectivity testing | ⏳ Pending |
 | 5 | End-to-end message flow tests | ⏳ Pending |
-| 6 | Complete Tauri IPC wiring | ⏳ Pending |
+| 6 | Complete Tauri IPC wiring | ✅ Done |
 | 7 | Frontend implementation | ⏳ Pending |
 
 ---
@@ -36,8 +36,8 @@
 ### Crypto Core
 
 - [x] Fixed CipherError::Decryption_failed → DecryptionFailed
-- [x] key_exchange.rs - reviewed, OK
-- [x] double_ratchet.rs - reviewed, OK
+- [x] key_exchange.rs - FIXED ML-KEM-768 public key size mismatch (1568 -> 1184 bytes)
+- [x] double_ratchet.rs - FIXED MessageKey type mismatch (removed clone(), consumed key properly)
 - [x] aead.rs - fixed and reviewed
 - [x] kdf.rs - reviewed, OK
 - [x] keys.rs - reviewed, OK
