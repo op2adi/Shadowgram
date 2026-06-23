@@ -179,7 +179,7 @@ impl PublicIdentity {
             .map_err(|_| IdentityError::InvalidFormat("Invalid signature length".into()))?;
 
         let ed25519_public = Ed25519PublicKey::from_bytes(
-            &ed25519_bytes.try_into()
+            &ed25519_bytes.clone().try_into()
                 .map_err(|_| IdentityError::InvalidFormat("Wrong Ed25519 key length".into()))?
         ).map_err(|_| IdentityError::InvalidFormat("Invalid Ed25519 public key".into()))?;
 

@@ -139,7 +139,7 @@ pub struct InvitationQr {
     qr: QrCode,
 
     /// Invitation metadata
-    invite_code: String,
+    _invite_code: String,
 
     /// Expiration timestamp
     expires_at: u64,
@@ -172,7 +172,7 @@ impl InvitationQr {
 
         Ok(Self {
             qr,
-            invite_code,
+            _invite_code: invite_code,
             expires_at,
         })
     }

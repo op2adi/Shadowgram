@@ -108,7 +108,7 @@ impl OnionAddress {
 /// Tor transport for anonymous communication
 pub struct TorTransport {
     /// Tor client instance
-    client: Option<Arc<TorClient>>,
+    client: Option<Arc<TorClient<tor_rtcompat::PreferredRuntime>>>,
 
     /// Connection timeout
     timeout_secs: u64,
@@ -215,7 +215,7 @@ impl Default for TorTransport {
 
 /// Tor stream wrapper for async I/O
 pub struct TorStream {
-    inner: arti_client::stream::acios::tcp::TcpStream,
+    inner: arti_client::DataStream,
 }
 
 impl TorStream {

@@ -17,7 +17,7 @@ pub struct PairwiseIdentity {
     x25519_public: X25519PublicKey,
 
     /// Ed25519 keypair for this contact
-    ed25519_secret: SigningKey,
+    _ed25519_secret: SigningKey,
     ed25519_public: VerifyingKey,
 
     /// Reference to the contact's identity (for lookup)
@@ -52,7 +52,7 @@ impl PairwiseIdentity {
         Self {
             x25519_secret,
             x25519_public,
-            ed25519_secret,
+            _ed25519_secret: ed25519_secret,
             ed25519_public,
             contact_fingerprint: their_public.fingerprint_full.as_bytes().try_into().unwrap_or([0u8; 32]),
         }

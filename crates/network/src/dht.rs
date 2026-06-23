@@ -11,17 +11,12 @@
 //! - Replica sets for redundancy
 
 use libp2p::{
-    kad::{
-        store::MemoryStore, Kademlia, KademliaConfig,
-        KademliaEvent, QueryResult, RecordKey,
-    },
+    kad::{Event as KademliaEvent, RecordKey},
     multiaddr::Multiaddr,
-    PeerId, Swarm, swarm::SwarmEvent,
+    PeerId,
 };
-use libp2p_kad::{GetRecordOk, PutRecord, Quorum};
-use rand::rngs::OsRng;
 use thiserror::Error;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 /// DHT errors
 #[derive(Error, Debug)]
@@ -132,7 +127,7 @@ impl DhtNode {
         fingerprint: &[u8],
     ) -> Result<PeerInfo, DhtError> {
         // Convert fingerprint to record key
-        let key = RecordKey::new(fingerprint);
+        let _key = RecordKey::new(&fingerprint.to_vec());
 
         // In production, would use the actual Kademlia swarm
         // For now, check known peers

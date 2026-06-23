@@ -4801,8 +4801,10 @@ version = "0.1.0"
 dependencies = [
  "arti-client",
  "async-trait",
+ "base64",
  "bincode 1.3.3",
  "bytes",
+ "chacha20poly1305",
  "dashmap",
  "futures",
  "libp2p",
@@ -4810,6 +4812,7 @@ dependencies = [
  "parking_lot",
  "rand 0.8.6",
  "serde",
+ "sha2",
  "shadowgram-crypto",
  "shadowgram-identity",
  "subtle",
@@ -4817,7 +4820,10 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tor-error",
+ "tor-rtcompat",
  "tracing",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

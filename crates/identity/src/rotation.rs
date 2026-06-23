@@ -89,7 +89,7 @@ impl RotationScheduler {
 
 /// Manages identity rotation with contact notification
 pub struct IdentityRotator {
-    scheduler: RotationScheduler,
+    _scheduler: RotationScheduler,
 
     /// Mapping of old identity fingerprints to new
     /// (for contact transition period)
@@ -99,7 +99,7 @@ pub struct IdentityRotator {
 impl IdentityRotator {
     pub fn new(scheduler: RotationScheduler) -> Self {
         Self {
-            scheduler,
+            _scheduler: scheduler,
             transition_map: std::collections::HashMap::new(),
         }
     }

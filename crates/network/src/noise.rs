@@ -7,7 +7,7 @@
 //! Based on Noise_IKpsk2 pattern for mutual authentication with
 //! pre-shared symmetric key.
 
-use rand::{rngs::OsRng, RngCore};
+use rand::rngs::OsRng;
 use x25519_dalek::{StaticSecret, PublicKey};
 use chacha20poly1305::{ChaCha20Poly1305, Key as ChachaKey, Nonce, KeyInit};
 use sha2::{Sha256, Digest};
@@ -84,7 +84,7 @@ struct CipherState {
 
 impl CipherState {
     fn new(key: [u8; 32]) -> Self {
-        Self { k, n: 0, rn: 0 }
+        Self { k: key, n: 0, rn: 0 }
     }
 
     /// Encrypt message with associated data
