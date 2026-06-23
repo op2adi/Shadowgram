@@ -18,7 +18,7 @@ pub use database::{
     Database, DbConfig, DbError,
     IdentityRow, ContactRow, MessageRow, DbStats,
 };
-pub use schema::{Schema, Tables};
+pub use schema::{tables, columns, SCHEMA_VERSION};
 pub use encrypted_cache::{EncryptedCache, CacheEntry};
 
 /// Storage library version

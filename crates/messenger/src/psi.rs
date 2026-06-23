@@ -172,10 +172,11 @@ impl ContactDiscoveryPSI {
             }
         }
 
+        let total_matched = matched.len();
         PsiResult {
             matched_fingerprints: matched,
             total_local_contacts: self.local_contacts.len(),
-            total_matched: matched.len(),
+            total_matched,
         }
     }
 

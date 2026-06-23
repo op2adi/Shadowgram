@@ -204,7 +204,7 @@ impl EncryptedCache {
     /// Get cache statistics
     pub fn stats(&self) -> CacheStats {
         let entries = self.entries.read();
-        let now = Instant::now();
+        let _now = Instant::now();
 
         let total = entries.len();
         let expired = entries.values().filter(|e| e.is_expired()).count();

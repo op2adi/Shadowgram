@@ -173,7 +173,7 @@ impl MixnetClient {
         batch.shuffle(&mut OsRng);
 
         // Add delays and send
-        for msg in &batch {
+        for _msg in &batch {
             let delay = OsRng.gen_range(self.config.min_delay_ms..=self.config.max_delay_ms);
             sleep(Duration::from_millis(delay)).await;
 

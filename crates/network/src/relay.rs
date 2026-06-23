@@ -5,7 +5,7 @@
 //! - Analysis resistance (observer can't tell which path is "real")
 //! - Load balancing
 
-use rand::{Rng, seq::SliceRandom};
+use rand::seq::SliceRandom;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -175,6 +175,10 @@ impl RelayPool {
 
     /// Record path result for future selection
     pub fn record_path_result(&mut self, result: PathResult) {
+        let relay_id = result.relay_id.clone();
+        let success = result.success;
+        let latency_ms = result.latency_ms;
+        
         self.path_history.push(result);
 
         // Keep only recent history
@@ -183,15 +187,15 @@ impl RelayPool {
         }
 
         // Update relay statistics
-        if let Some(latency) = result.latency_ms {
-            if let Some(relay) = self.relays.get_mut(&result.relay_id) {
+        if let Some(latency) = latency_ms {
+            if let Some(relay) = self.relays.get_mut(&relay_id) {
                 // Exponential moving average
                 relay.latency_ms = (relay.latency_ms as f64 * 0.9 + latency as f64 * 0.1) as u64;
             }
         }
 
-        if !result.success {
-            if let Some(relay) = self.relays.get_mut(&result.relay_id) {
+        if !success {
+            if let Some(relay) = self.relays.get_mut(&relay_id) {
                 relay.success_rate *= 0.95; // Decay on failure
             }
         }
@@ -266,7 +270,7 @@ impl MultiPathRouting {
     /// Send message via all paths
     pub async fn send_multi_path(
         &self,
-        message: &[u8],
+        _message: &[u8],
     ) -> Result<SendResult, RelayError> {
         let paths = self.build_paths()?;
 
@@ -288,7 +292,7 @@ impl MultiPathRouting {
     /// Send and wait for first successful delivery
     pub async fn send_first_wins(
         &self,
-        message: &[u8],
+        _message: &[u8],
     ) -> Result<SendResult, RelayError> {
         let paths = self.build_paths()?;
 
@@ -342,7 +346,7 @@ pub enum PathStrategy {
 
 impl PathStrategy {
     /// Select relays based on strategy
-    pub fn select(&self, pool: &RelayPool, count: usize) -> Vec<&RelayNode> {
+    pub fn select<'a>(&self, pool: &'a RelayPool, count: usize) -> Vec<&'a RelayNode> {
         match self {
             PathStrategy::BestScore => pool.select_relays(count),
             PathStrategy::Random => pool.select_random_relays(count),

@@ -8,7 +8,7 @@ description = "Secure storage layer for Shadowgram - SQLCipher, encrypted caches
 [dependencies]
 shadowgram-crypto = { path = "../crypto" }
 shadowgram-identity = { path = "../identity" }
-shadowgram-messenger = { path = "../messenger" }
+
 
 # Storage
 rusqlite.workspace = true
@@ -17,6 +17,7 @@ r2d2.workspace = true
 # Zeroization
 zeroize.workspace = true
 subtle.workspace = true
+rand.workspace = true
 
 # Serialization
 serde.workspace = true

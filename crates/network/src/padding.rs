@@ -3,7 +3,7 @@
 //! To defeat traffic analysis based on message sizes, all messages
 //! are padded to fixed sizes. This module provides padding utilities.
 
-use rand::{RngCore, rngs::OsRng};
+use rand::{RngCore, Rng, rngs::OsRng};
 use thiserror::Error;
 
 /// Padding configuration

@@ -289,7 +289,7 @@ impl PeerDiscovery {
 
     /// Clear stale entries from cache
     pub fn prune_cache(&mut self, max_age: std::time::Duration) {
-        let now = std::time::SystemTime::now();
+        let _now = std::time::SystemTime::now();
 
         self.discovered_peers.retain(|_, info| {
             info.last_seen.elapsed().unwrap_or(std::time::Duration::MAX) < max_age

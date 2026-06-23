@@ -140,7 +140,7 @@ impl Database {
     pub fn init_schema(&self) -> Result<(), DbError> {
         let conn = self.conn.read();
 
-        conn.execute_batch(include_str!("../migrations/001_init.sql"))?;
+        conn.execute_batch(include_str!("migrations/001_init.sql"))?;
 
         Ok(())
     }
@@ -298,7 +298,7 @@ impl Database {
             })
         })?;
 
-        rows.collect()
+        rows.map(|r| r.map_err(DbError::from)).collect()
     }
 
     /// Get database statistics

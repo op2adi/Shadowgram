@@ -9,10 +9,9 @@
 
 use rand::rngs::OsRng;
 use x25519_dalek::{StaticSecret, PublicKey};
-use chacha20poly1305::{ChaCha20Poly1305, Key as ChachaKey, Nonce, KeyInit};
+use chacha20poly1305::{ChaCha20Poly1305, Key as ChachaKey, Nonce, KeyInit, aead::Aead};
 use sha2::{Sha256, Digest};
 use thiserror::Error;
-use zeroize::Zeroize;
 
 /// Noise protocol errors
 #[derive(Error, Debug)]
@@ -90,7 +89,7 @@ impl CipherState {
     /// Encrypt message with associated data
     fn encrypt_with_ad(
         &mut self,
-        ad: &[u8],
+        _ad: &[u8],
         plaintext: &[u8],
     ) -> Result<Vec<u8>, NoiseError> {
         let key = ChachaKey::from_slice(&self.k);
@@ -100,7 +99,7 @@ impl CipherState {
         nonce_bytes[4..12].copy_from_slice(&self.n.to_le_bytes());
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let mut ciphertext = cipher
+        let ciphertext = cipher
             .encrypt(nonce, plaintext)
             .map_err(|_| NoiseError::DecryptionFailed)?;
 
@@ -112,7 +111,7 @@ impl CipherState {
     /// Decrypt message with associated data
     fn decrypt_with_ad(
         &mut self,
-        ad: &[u8],
+        _ad: &[u8],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, NoiseError> {
         let key = ChachaKey::from_slice(&self.k);
@@ -140,9 +139,9 @@ impl NoiseIK {
     /// * `rs` - Their static public key (known ahead of time)
     /// * `psk` - Pre-shared key
     pub fn new_initiator(
-        s: StaticSecret,
-        rs: PublicKey,
-        psk: &[u8; 32],
+        _s: StaticSecret,
+        _rs: PublicKey,
+        _psk: &[u8; 32],
     ) -> Self {
         // Initialize handshake state
         // In production, would follow Noise_IKpsk2 pattern exactly
@@ -154,7 +153,7 @@ impl NoiseIK {
     }
 
     /// Create new Noise IK responder
-    pub fn new_responder(s: StaticSecret, psk: &[u8; 32]) -> Self {
+    pub fn new_responder(_s: StaticSecret, _psk: &[u8; 32]) -> Self {
         Self {
             state: HandshakeState::Init,
             cipher: None,
@@ -220,7 +219,7 @@ impl NoiseIK {
     }
 
     /// Initiator: read response, finalize handshake
-    pub fn read_message_b(&mut self, msg: &HandshakeMessageB) -> Result<(), NoiseError> {
+    pub fn read_message_b(&mut self, _msg: &HandshakeMessageB) -> Result<(), NoiseError> {
         self.state = HandshakeState::Complete;
 
         // Initialize cipher

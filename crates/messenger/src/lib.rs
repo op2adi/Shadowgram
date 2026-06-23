@@ -18,10 +18,10 @@ pub mod psi;
 pub use client::{Client, ClientConfig, ClientError};
 pub use chat::{Chat, ChatSession, ChatError, ChatState, ChatStats};
 pub use message::{
-    Message, MessageEnvelope, MessageStatus, MessageType as MsgType,
+    Message, MessageEnvelope, MessageStatus, MessageType,
     MessageDirection, MessageBatch, MessagePriority, MessageHeader, MessageError,
 };
-pub use contacts::{Contact, ContactStore, ContactDiscovery, TrustLevel};
+pub use contacts::{Contact, ContactStore, MemoryContactStore, ContactDiscovery, TrustLevel};
 pub use group::{GroupState, GroupInfo, GroupMember, MemberRole, Commit, GroupError};
 pub use sync::{DeviceSync, SyncError, DeviceInfo, SyncOperation};
 pub use psi::{PsiProtocol, ContactDiscoveryPSI, PsiResult, ContactFingerprint};

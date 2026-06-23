@@ -161,7 +161,7 @@ fn uuid_v4() -> String {
     use rand::{RngCore, rngs::OsRng};
     let mut bytes = [0u8; 16];
     OsRng.fill_bytes(&mut bytes);
-    format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}",
+    format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         bytes[0], bytes[1], bytes[2], bytes[3],
         bytes[4], bytes[5],
         bytes[6], bytes[7],

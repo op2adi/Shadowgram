@@ -164,11 +164,14 @@ impl ChatSession {
         let ratchet = self.ratchet.as_mut()
             .ok_or(ChatError::SessionNotFound)?;
 
-        let (ciphertext, header) = ratchet.encrypt(plaintext)
+        let (ciphertext, header) = ratchet.encrypt(plaintext, b"")
             .map_err(|e| ChatError::EncryptionError(e.to_string()))?;
 
         // Serialize header + ciphertext
-        let mut output = header.serialize();
+        let header_bytes = header.to_bytes().map_err(|e| ChatError::EncryptionError(e.to_string()))?;
+        let header_len = header_bytes.len() as u32;
+        let mut output = header_len.to_le_bytes().to_vec();
+        output.extend(header_bytes);
         output.extend(ciphertext);
         Ok(output)
     }
@@ -178,15 +181,21 @@ impl ChatSession {
         let ratchet = self.ratchet.as_mut()
             .ok_or(ChatError::SessionNotFound)?;
 
-        // Parse header (first 96 bytes for X25519 public key + counters)
-        if ciphertext.len() < 96 {
+        if ciphertext.len() < 4 {
+            return Err(ChatError::InvalidMessage("Message too short".into()));
+        }
+        let mut len_bytes = [0u8; 4];
+        len_bytes.copy_from_slice(&ciphertext[0..4]);
+        let header_len = u32::from_le_bytes(len_bytes) as usize;
+
+        if ciphertext.len() < 4 + header_len {
             return Err(ChatError::InvalidMessage("Message too short".into()));
         }
 
-        let header = crate::message::MessageHeader::deserialize(&ciphertext[..96])
+        let header = shadowgram_crypto::double_ratchet::MessageHeader::from_bytes(&ciphertext[4..4+header_len])
             .map_err(|e| ChatError::DecryptionError(e.to_string()))?;
 
-        let plaintext = ratchet.decrypt(&header, &ciphertext[96..])
+        let plaintext = ratchet.decrypt(&ciphertext[4+header_len..], &header, b"")
             .map_err(|e| ChatError::DecryptionError(e.to_string()))?;
 
         self.record_activity();

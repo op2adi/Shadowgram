@@ -4,8 +4,8 @@
 //! real communication patterns. This defeats traffic analysis
 //! that tries to correlate send/receive times.
 
-use rand::{Rng, distributions::Distribution, rngs::OsRng};
-use tokio::time::{interval, Duration, Interval};
+use rand::{Rng, RngCore, rngs::OsRng};
+use tokio::time::Duration;
 use thiserror::Error;
 
 /// Cover traffic configuration
@@ -154,7 +154,7 @@ impl CoverTraffic {
     }
 
     /// Time until next cover message should be sent
-    pub fn time_until_next(&self) -> Option<Duration> {
+    pub fn time_until_next(&mut self) -> Option<Duration> {
         if self.pending_message.is_some() {
             Some(self.schedule_next())
         } else {
@@ -282,7 +282,7 @@ impl AdaptiveCoverTraffic {
     /// Adjust cover traffic rate based on real traffic
     fn adjust_rate(&mut self) {
         // Increase cover traffic if we're below target ratio
-        let target_cover = (self.recent_real_messages as f64 * self.target_ratio) as usize;
+        let _target_cover = (self.recent_real_messages as f64 * self.target_ratio) as usize;
 
         // Simple adjustment: double or halve
         if self.rate_multiplier < 1.0 {

@@ -9,6 +9,11 @@ description = "High-level messaging protocol for Shadowgram - chat, groups, cont
 shadowgram-crypto = { path = "../crypto" }
 shadowgram-identity = { path = "../identity" }
 shadowgram-network = { path = "../network" }
+shadowgram-storage = { path = "../storage" }
+
+# Hashes and Encodings
+blake3.workspace = true
+base64.workspace = true
 
 # Async
 tokio.workspace = true

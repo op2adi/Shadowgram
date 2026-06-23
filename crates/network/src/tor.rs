@@ -173,7 +173,7 @@ impl TorTransport {
             .as_ref()
             .ok_or(TorError::NotInitialized)?;
 
-        let stream_prefs = StreamPrefs::new();
+        let _stream_prefs = StreamPrefs::new();
         // In production, could set specific stream preferences here
 
         client.connect(&address.full_address)

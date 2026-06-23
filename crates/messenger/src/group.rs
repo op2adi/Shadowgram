@@ -179,7 +179,8 @@ impl RatchetTree {
         // Simple implementation: rebuild parent pointers
         // In production, would use proper tree balancing algorithm
 
-        for i in 0..self.nodes.len() {
+        let num_nodes = self.nodes.len();
+        for i in 0..num_nodes {
             let parent = if i > 0 { (i - 1) / 2 } else { 0 };
             let left = 2 * i + 1;
             let right = 2 * i + 2;
@@ -187,11 +188,11 @@ impl RatchetTree {
             if let Some(node) = self.nodes.get_mut(i) {
                 node.parent = if i > 0 { Some(parent) } else { None };
 
-                if left < self.nodes.len() {
+                if left < num_nodes {
                     node.left = Some(left);
                 }
 
-                if right < self.nodes.len() {
+                if right < num_nodes {
                     node.right = Some(right);
                 }
             }
@@ -555,11 +556,6 @@ impl GroupChat {
     pub fn pending_commits(&self) -> &[Commit] {
         &self.state.pending_commits
     }
-}
-
-fn current_timestamp() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
 #[cfg(test)]

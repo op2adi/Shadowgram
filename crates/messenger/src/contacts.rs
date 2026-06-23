@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use thiserror::Error;
+use base64::Engine;
 
 /// Contact errors
 #[derive(Error, Debug)]
@@ -23,7 +24,7 @@ pub enum ContactError {
 }
 
 /// Trust level for contacts
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TrustLevel {
     /// Unverified - just scanned QR
     Unverified = 0,

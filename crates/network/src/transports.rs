@@ -11,6 +11,7 @@
 
 use thiserror::Error;
 use bytes::{Bytes, BytesMut};
+use base64::Engine;
 
 /// Transport errors
 #[derive(Error, Debug)]

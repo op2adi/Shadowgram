@@ -75,7 +75,7 @@ pub const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
         description: "Initial schema",
-        sql: include_str!("../migrations/001_init.sql"),
+        sql: include_str!("migrations/001_init.sql"),
     },
 ];
 
@@ -97,7 +97,7 @@ pub fn needs_migration(conn: &rusqlite::Connection) -> Result<Option<u32>, rusql
 
     for migration in MIGRATIONS {
         if !applied.contains(&migration.version) {
-            return Some(migration.version).into();
+            return Ok(Some(migration.version));
         }
     }
 

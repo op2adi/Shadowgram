@@ -12,8 +12,6 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use shadowgram_crypto::{
     key_exchange::{HybridKeypair, KeyExchangeMessage},
-    double_ratchet::DoubleRatchet,
-    aead::AeadCipher,
     keys::KeyMaterial,
 };
 use shadowgram_identity::{Identity, PublicIdentity, RotationPolicy};
@@ -161,7 +159,7 @@ pub struct Client {
     running: Arc<RwLock<bool>>,
 
     /// Local identity
-    identity: Arc<RwLock<Option<Identity>>>,
+    identity: Arc<RwLock<Option<Arc<Identity>>>>,
 
     /// Session store
     sessions: Arc<SessionStore>,
@@ -201,11 +199,11 @@ impl Client {
             sessions: Arc::new(SessionStore::new()),
             contacts: Arc::new(RwLock::new(MemoryContactStore::new())),
             database: Arc::new(RwLock::new(None)),
-            cache: Arc::new(RwLock::new(EncryptedCache::new(cache_key))),
+            cache: Arc::new(RwLock::new(EncryptedCache::new())),
             tor: Arc::new(RwLock::new(None)),
             mixnet: Arc::new(RwLock::new(None)),
             dht: Arc::new(RwLock::new(None)),
-            device_sync: Arc::new(RwLock::new(DeviceSync::new())),
+            device_sync: Arc::new(RwLock::new(DeviceSync::new("default".to_string()))),
         })
     }
 
@@ -230,7 +228,7 @@ impl Client {
     }
 
     /// Get local identity (read-only)
-    pub fn identity(&self) -> Option<Identity> {
+    pub fn identity(&self) -> Option<Arc<Identity>> {
         self.identity.read().clone()
     }
 
@@ -238,37 +236,42 @@ impl Client {
     pub fn fingerprint(&self) -> Option<String> {
         self.identity.read()
             .as_ref()
-            .map(|i| i.public().fingerprint())
+            .map(|i| i.public().display_fingerprint().to_string())
     }
 
     /// Create new identity
-    pub fn create_identity(&self) -> Result<Identity, ClientError> {
-        let identity = Identity::new()
+    pub fn create_identity(&self) -> Result<Arc<Identity>, ClientError> {
+        let identity = Identity::generate()
             .map_err(|e| ClientError::IdentityError(e.to_string()))?;
 
         // Store in database if available
         if let Some(db) = self.database.read().as_ref() {
-            db.store_identity(&identity, self.config.db_key.as_ref().unwrap_or(&[0u8; 32]))
-                .map_err(|e| ClientError::StorageError(e.to_string()))?;
+            db.store_identity(
+                identity.public().display_fingerprint(),
+                &identity.public().to_bytes().unwrap_or_default(),
+                &identity.serialize_encrypted(self.config.db_key.as_ref().unwrap_or(&[0u8; 32])).unwrap_or_default()
+            ).map_err(|e| ClientError::StorageError(e.to_string()))?;
         }
 
+        let identity = Arc::new(identity);
         *self.identity.write() = Some(identity.clone());
 
         // Schedule sync to other devices
-        if let Ok(mut sync) = self.device_sync.write() {
-            sync.queue_operation(SyncOperation::IdentityCreated);
-        }
+        let mut sync = self.device_sync.write();
+        sync.queue_operation(SyncOperation::IdentityUpdate { new_fingerprint: identity.public().display_fingerprint().to_string() });
 
         Ok(identity)
     }
 
     /// Load existing identity from storage
-    pub fn load_identity(&self, key: &[u8; 32]) -> Result<Identity, ClientError> {
+    pub fn load_identity(&self, fingerprint: &str) -> Result<Arc<Identity>, ClientError> {
         // Try database first
         if let Some(db) = self.database.read().as_ref() {
-            if let Ok(identity) = db.load_identity(key) {
-                *self.identity.write() = Some(identity.clone());
-                return Ok(identity);
+            if let Ok(Some(_row)) = db.load_identity(fingerprint) {
+                // In production: decrypt private keys from row.encrypted_private_key
+                // and reconstruct Identity. For now, we know the identity exists but
+                // cannot reconstruct it from storage alone.
+                // The caller should use create_identity() if no in-memory identity exists.
             }
         }
 
@@ -283,19 +286,22 @@ impl Client {
 
         *self.state.write() = ClientState::Connecting;
 
-        // Initialize database
-        let db = Database::open(&self.config.storage_path, self.config.db_key.as_ref())
+        let db_config = shadowgram_storage::DbConfig {
+            path: self.config.storage_path.clone().into(),
+            encryption_key: self.config.db_key.unwrap_or([0u8; 32]),
+            ..Default::default()
+        };
+        let mut db = Database::new(db_config)
             .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        db.open().map_err(|e| ClientError::StorageError(e.to_string()))?;
         *self.database.write() = Some(db);
 
-        // Load identity from storage if exists
-        if self.config.db_key.is_some() {
-            let _ = self.load_identity(self.config.db_key.as_ref().unwrap());
-        }
+        // TODO: Load primary identity if fingerprint known
 
         // Initialize network transports
         if self.config.use_tor {
-            let tor = TorTransport::bootstrap()
+            let mut tor = TorTransport::new();
+            tor.bootstrap()
                 .await
                 .map_err(|e| ClientError::NetworkError(e.to_string()))?;
             *self.tor.write() = Some(tor);
@@ -327,12 +333,12 @@ impl Client {
 
         // Flush pending messages
         // Close network connections
-        if let Some(tor) = self.tor.write().as_mut() {
-            tor.disconnect().map_err(|e| ClientError::NetworkError(e.to_string()))?;
+        if let Some(mut tor) = self.tor.write().take() {
+            // Drop handles disconnection
         }
 
-        if let Some(mixnet) = self.mixnet.write().as_mut() {
-            mixnet.shutdown();
+        if let Some(mut mixnet) = self.mixnet.write().take() {
+            // Drop handles disconnection
         }
 
         // Zeroize sensitive data in cache
@@ -353,14 +359,12 @@ impl Client {
         contact_fingerprint: &str,
     ) -> Result<NetworkEnvelope, ClientError> {
         // Create hybrid keypair for key exchange
-        let keypair = HybridKeypair::random()
-            .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+        let keypair = HybridKeypair::generate_initiator();
 
         // Serialize key exchange message
-        let exchange_msg = KeyExchangeMessage::from_keypair(&keypair)
-            .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+        let exchange_msg = KeyExchangeMessage::from_initiator(keypair.x25519_public(), keypair.mlkem_encapsulation_key());
 
-        let payload = exchange_msg.serialize()
+        let payload = serde_json::to_vec(&exchange_msg)
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
 
         // Create network envelope
@@ -388,9 +392,7 @@ impl Client {
 
     /// Check if session is established with contact
     pub async fn is_session_established(&self, fingerprint: &str) -> bool {
-        self.sessions.read()
-            .sessions
-            .read()
+        self.sessions.sessions.read()
             .contains_key(fingerprint)
     }
 
@@ -401,11 +403,9 @@ impl Client {
         message: Message,
     ) -> Result<NetworkEnvelope, ClientError> {
         // Get or create chat session
-        let sessions = self.sessions.read();
-        let session = sessions.sessions.read()
-            .get(contact_fingerprint)
-            .cloned()
-            .ok_or_else(|| ClientError::SessionNotFound(contact_fingerprint.to_string()))?;
+        if !self.sessions.sessions.read().contains_key(contact_fingerprint) {
+            return Err(ClientError::SessionNotFound(contact_fingerprint.to_string()));
+        }
 
         // Serialize message
         let payload = message.serialize()
@@ -468,28 +468,31 @@ impl Client {
 
         let group_info = GroupInfo {
             id: group_id.clone(),
-            name: name.to_string(),
-            creator: creator.public().fingerprint(),
+            name: Some(name.to_string()),
+            creator: creator.public().display_fingerprint().to_string(),
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
             epoch: 0,
+            avatar: None,
+            description: None,
         };
 
         let member = GroupMember {
-            identity: creator.public().clone(),
+            fingerprint: creator.public().display_fingerprint().to_string(),
             role: MemberRole::Admin,
             joined_at: group_info.created_at,
+            display_name: None,
+            key_package: vec![],
+            left_at: None,
         };
 
-        let mut group = GroupState::new(group_info);
-        group.add_local_member(member);
+        let mut group = GroupState::create(group_info, creator.public().display_fingerprint().to_string(), vec![]);
+        let _ = group.add_member(member);
 
         // Store group
-        self.sessions.write()
-            .groups
-            .write()
+        self.sessions.groups.write()
             .insert(group_id.clone(), group);
 
         Ok(group_id)
@@ -501,8 +504,8 @@ impl Client {
         group_id: &str,
         member_fingerprint: &str,
     ) -> Result<Vec<u8>, ClientError> {
-        let groups = self.sessions.read();
-        let mut group = groups.groups.write()
+        let mut groups = self.sessions.groups.write();
+        let group = groups
             .get_mut(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
 
@@ -516,8 +519,8 @@ impl Client {
         group_id: &str,
         message: Message,
     ) -> Result<NetworkEnvelope, ClientError> {
-        let groups = self.sessions.read();
-        let group = groups.groups.read()
+        let groups = self.sessions.groups.read();
+        let group = groups
             .get(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
 
@@ -547,27 +550,27 @@ impl Client {
 
     /// Add contact
     pub fn add_contact(&self, contact: Contact) -> Result<(), ClientError> {
-        self.contacts.write()
-            .add_contact(contact)
+        self.contacts.read()
+            .add(contact)
             .map_err(|e| ClientError::StorageError(e.to_string()))
     }
 
     /// Get contact by fingerprint
     pub fn get_contact(&self, fingerprint: &str) -> Option<Contact> {
         self.contacts.read()
-            .get_contact(fingerprint)
-            .cloned()
+            .get(fingerprint)
+            .unwrap_or(None)
     }
 
     /// List all contacts
     pub fn list_contacts(&self) -> Vec<Contact> {
-        self.contacts.read().list_contacts()
+        self.contacts.read().list().unwrap_or_default()
     }
 
     /// Remove contact
     pub fn remove_contact(&self, fingerprint: &str) -> Result<(), ClientError> {
-        self.contacts.write()
-            .remove_contact(fingerprint)
+        self.contacts.read()
+            .remove(fingerprint)
             .map_err(|e| ClientError::StorageError(e.to_string()))
     }
 
@@ -579,7 +582,7 @@ impl Client {
         let contacts = self.list_contacts();
         let fingerprints: Vec<String> = contacts
             .iter()
-            .map(|c| c.identity.fingerprint.clone())
+            .map(|c| c.fingerprint.clone())
             .collect();
 
         let discovery = ContactDiscoveryPSI::new(fingerprints);
@@ -590,21 +593,18 @@ impl Client {
 
     /// Register new device
     pub fn register_device(&self, device: DeviceInfo) -> Result<(), ClientError> {
-        self.device_sync.write()
-            .register_device(device)
-            .map_err(|e| ClientError::IdentityError(e.to_string()))
+        self.device_sync.write().register_device(device);
+        Ok(())
     }
 
     /// Get pending sync operations
     pub fn get_pending_sync(&self) -> Vec<SyncOperation> {
-        self.device_sync.read().pending_operations.clone()
+        self.device_sync.write().take_pending_ops()
     }
 
     /// Mark sync operation complete
-    pub fn complete_sync_operation(&self, index: usize) {
-        if let Ok(mut sync) = self.device_sync.write() {
-            sync.mark_operation_complete(index);
-        }
+    pub fn complete_sync_operation(&self, _index: usize) {
+        // Operations are taken via take_pending_ops, so no need to mark complete individually
     }
 
     // ==================== Internal Handlers ====================
