@@ -147,7 +147,7 @@ impl Default for MemoryContactStore {
 }
 
 impl ContactStore for MemoryContactStore {
-    type Error = std::convert::Infallible;
+    type Error = ContactError;
 
     fn add(&self, contact: Contact) -> Result<(), Self::Error> {
         let mut contacts = self.contacts.write().unwrap();

@@ -23,7 +23,7 @@ pub use message::{
 };
 pub use contacts::{Contact, ContactStore, MemoryContactStore, ContactDiscovery, TrustLevel};
 pub use group::{GroupState, GroupInfo, GroupMember, MemberRole, Commit, GroupError};
-pub use sync::{DeviceSync, SyncError, DeviceInfo, SyncOperation};
+pub use sync::{DeviceSync, SyncError, SyncStatus, DeviceInfo, SyncOperation};
 pub use psi::{PsiProtocol, ContactDiscoveryPSI, PsiResult, ContactFingerprint};
 
 /// Library version

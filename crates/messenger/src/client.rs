@@ -656,23 +656,24 @@ mod tests {
         let client = Client::with_defaults().unwrap();
         let identity = client.create_identity().unwrap();
 
-        assert!(!identity.public().fingerprint().is_empty());
-        assert_eq!(client.fingerprint(), Some(identity.public().fingerprint()));
+        assert!(!identity.public().display_fingerprint().is_empty());
+        assert_eq!(client.fingerprint(), Some(identity.public().display_fingerprint().to_string()));
     }
 
     #[test]
     fn test_contact_management() {
         let client = Client::with_defaults().unwrap();
 
-        let contact = Contact::trusted(
+        let contact = Contact::new(
             "test_fp".to_string(),
             "Test User".to_string(),
+            vec![],
         );
 
         client.add_contact(contact.clone()).unwrap();
 
         let retrieved = client.get_contact("test_fp").unwrap();
-        assert_eq!(retrieved.identity.fingerprint, "test_fp");
+        assert_eq!(retrieved.fingerprint, "test_fp");
 
         let contacts = client.list_contacts();
         assert_eq!(contacts.len(), 1);

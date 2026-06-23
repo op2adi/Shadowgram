@@ -98,7 +98,7 @@ impl ShamirSecretSharing {
     /// # Returns
     /// Vector of `total` shares
     pub fn split(secret: &[u8], threshold: u8, total: u8) -> Result<Vec<SecretShare>, ShareError> {
-        let _config = ThresholdConfig::new(threshold, total)?;
+        let _config = ThresholdConfig::new(total, threshold)?;
 
         let mut shares = Vec::with_capacity(total as usize);
 
@@ -161,13 +161,34 @@ impl ShamirSecretSharing {
         Ok(secret)
     }
 
+    // GF(256) Addition / Subtraction
+    fn gf_add(a: u8, b: u8) -> u8 { a ^ b }
+    fn gf_sub(a: u8, b: u8) -> u8 { a ^ b }
+
+    // GF(256) Multiplication
+    fn gf_mul(mut a: u8, mut b: u8) -> u8 {
+        let mut p = 0;
+        for _ in 0..8 {
+            if (b & 1) != 0 { p ^= a; }
+            let hi_bit_set = (a & 0x80) != 0;
+            a <<= 1;
+            if hi_bit_set { a ^= 0x1B; } // x^8 + x^4 + x^3 + x + 1
+            b >>= 1;
+        }
+        p
+    }
+
+    // GF(256) Inverse
+    fn gf_inv(a: u8) -> u8 {
+        if a == 0 { return 0; }
+        for i in 1..=255 {
+            if Self::gf_mul(a, i) == 1 { return i; }
+        }
+        0
+    }
+
     /// Split a single byte using polynomial interpolation over GF(256)
-    ///
-    /// This is a simplified implementation. Production should use proper
-    /// GF(256) arithmetic with irreducible polynomial.
     fn split_byte(secret: u8, threshold: u8, total: u8, _byte_index: u8) -> Vec<u8> {
-        // Generate random polynomial coefficients
-        // f(x) = secret + a1*x + a2*x^2 + ... + a(m-1)*x^(m-1)
         let mut coefficients = Vec::with_capacity(threshold as usize);
         coefficients.push(secret); // f(0) = secret
 
@@ -175,7 +196,6 @@ impl ShamirSecretSharing {
             coefficients.push(OsRng.gen::<u8>());
         }
 
-        // Evaluate polynomial at x = 1, 2, ..., n
         let mut shares = Vec::with_capacity(total as usize);
         for x in 1..=total {
             let y = Self::eval_polynomial(&coefficients, x);
@@ -187,31 +207,24 @@ impl ShamirSecretSharing {
 
     /// Reconstruct a byte from shares using Lagrange interpolation
     fn reconstruct_byte(share_bytes: &[(u8, u8)], threshold: u8) -> u8 {
-        // Lagrange interpolation at x = 0
-        // f(0) = sum(y_i * L_i(0)) where L_i(0) = product((0 - x_j)/(x_i - x_j))
-
         let mut result = 0u8;
 
         for i in 0..threshold as usize {
             let (xi, yi) = share_bytes[i];
 
-            // Calculate Lagrange basis polynomial at x=0
-            let mut li = 1u8;
-            let mut li_denom_inv = 1u8;
+            let mut li_num = 1u8;
+            let mut li_den = 1u8;
 
             for j in 0..threshold as usize {
                 if i != j {
                     let xj = share_bytes[j].0;
-                    // li *= (0 - xj) = -xj = xj (in GF with proper handling)
-                    li = li.wrapping_mul(xj);
-                    // denom *= (xi - xj)
-                    li_denom_inv = li_denom_inv.wrapping_mul(xi.wrapping_sub(xj));
+                    li_num = Self::gf_mul(li_num, Self::gf_sub(0, xj));
+                    li_den = Self::gf_mul(li_den, Self::gf_sub(xi, xj));
                 }
             }
 
-            // In GF(256), division is multiplication by inverse
-            // Simplified: just multiply yi * li / denom
-            result = result.wrapping_add(yi.wrapping_mul(li.wrapping_mul(li_denom_inv)));
+            let li = Self::gf_mul(li_num, Self::gf_inv(li_den));
+            result = Self::gf_add(result, Self::gf_mul(yi, li));
         }
 
         result
@@ -223,8 +236,8 @@ impl ShamirSecretSharing {
         let mut x_power = 1u8;
 
         for &coeff in coefficients {
-            result = result.wrapping_add(coeff.wrapping_mul(x_power));
-            x_power = x_power.wrapping_mul(x);
+            result = Self::gf_add(result, Self::gf_mul(coeff, x_power));
+            x_power = Self::gf_mul(x_power, x);
         }
 
         result

@@ -6,6 +6,7 @@ members = [
     "crates/messenger",
     "crates/storage",
     "tests",
+    "src-tauri",
 ]
 resolver = "2"
 

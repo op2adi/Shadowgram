@@ -49,10 +49,10 @@ impl QrCode {
         qr_data.extend_from_slice(b"SGRAM"); // Magic bytes
         qr_data.extend_from_slice(&data);
 
-        // Generate QR code with high error correction
+        // Generate QR code with low error correction to maximize capacity
         let image = QrImage::with_error_correction_level(
             &qr_data,
-            EcLevel::H, // High error correction (up to 30% damage)
+            EcLevel::L, // Low error correction (up to 7% damage) - needed for large ML-KEM keys
         ).map_err(|e| QrError::EncodingFailed(e.to_string()))?;
 
         Ok(Self {

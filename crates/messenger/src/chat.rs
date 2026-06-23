@@ -30,7 +30,7 @@ pub enum ChatError {
 }
 
 /// Chat session state
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ChatState {
     /// New chat, no session established
     New,
