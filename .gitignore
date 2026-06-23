@@ -1,0 +1,68 @@
+# Rust
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Linux
+Thumbs.db
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Coverage
+*.gcda
+*.gcno
+coverage/
+tarpaulin-report.html
+
+# Fuzzing
+fuzz/artifacts/
+fuzz/corpus/
+
+# Test databases
+*.db
+*.sqlite
+*.sqlite3
+/tmp/alice_shadowgram/
+/tmp/bob_shadowgram/
+
+# Secrets and keys
+*.pem
+*.key
+*.crt
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Documentation build
+doc/
+
+# Benchmark results
+criterion/
+q1.py

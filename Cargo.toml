@@ -1,0 +1,137 @@
+[workspace]
+members = [
+    "crates/crypto",
+    "crates/identity",
+    "crates/network",
+    "crates/messenger",
+    "crates/storage",
+    "tests",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Shadowgram Contributors"]
+homepage = "https://github.com/shadowgram/shadowgram"
+repository = "https://github.com/shadowgram/shadowgram"
+keywords = ["privacy", "messenger", "cryptography", "tor", "p2p"]
+categories = ["cryptography", "network-programming"]
+
+[workspace.dependencies]
+# ============================================================================
+# Cryptography
+# ============================================================================
+# Curve25519 for key exchange
+x25519-dalek = { version = "2.0", features = ["static_secrets", "reusable_secrets"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+curve25519-dalek = { version = "4.1", features = ["serde", "zeroize"] }
+
+# Post-Quantum: ML-KEM-768 (Kyber)
+ml-kem = "0.3"
+
+# AEAD: ChaCha20-Poly1305 and AES-GCM
+chacha20poly1305 = "0.10"
+aes-gcm = "0.10"
+
+# Key derivation
+hkdf = "0.12"
+sha2 = "0.10"
+blake3 = "1.5"
+
+# Hashing for fingerprints
+digest = "0.10"
+
+# ============================================================================
+# Zeroization and Secure Memory
+# ============================================================================
+zeroize = { version = "1.7", features = ["derive", "alloc"] }
+subtle = { version = "2.5", features = ["i128"] }
+
+# ============================================================================
+# Serialization
+# ============================================================================
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+base64 = "0.22"
+hex = "0.4"
+
+# ============================================================================
+# Async Runtime
+# ============================================================================
+tokio = { version = "1.35", features = ["full", "tracing"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+futures = "0.3"
+
+# ============================================================================
+# Tor (Pure Rust)
+# ============================================================================
+arti-client = { version = "0.22", default-features = false, features = ["tokio", "rustls"] }
+tor-error = "0.22"
+
+# ============================================================================
+# DHT / P2P
+# ============================================================================
+libp2p = { version = "0.54", features = ["kad", "tcp", "dns", "tls", "noise", "yamux"] }
+libp2p-kad = "0.46"
+unsigned-varint = "0.8"
+
+# ============================================================================
+# Storage
+# ============================================================================
+rusqlite = { version = "0.31", features = ["bundled"] }
+r2d2 = "0.8"
+
+# ============================================================================
+# QR Codes
+# ============================================================================
+qrcode = "0.14"
+image = "0.25"
+
+# ============================================================================
+# Utilities
+# ============================================================================
+rand = "0.8"
+rand_chacha = "0.3"
+rand_core = "0.6"
+getrandom = "0.2"
+bytes = "1.5"
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+log = "0.4"
+once_cell = "1.19"
+lazy_static = "1.4"
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# ============================================================================
+# Testing
+# ============================================================================
+proptest = "1.4"
+criterion = "0.5"
+tempfile = "3.9"
+
+# ============================================================================
+# Tauri (Frontend Integration)
+# ============================================================================
+tauri = { version = "2.0", features = [] }
+tauri-plugin-shell = "2.0"
+serde-wasm-bindgen = "0.6"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.bench]
+lto = true

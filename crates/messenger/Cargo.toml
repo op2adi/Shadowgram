@@ -1,0 +1,41 @@
+[package]
+name = "shadowgram-messenger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "High-level messaging protocol for Shadowgram - chat, groups, contacts"
+
+[dependencies]
+shadowgram-crypto = { path = "../crypto" }
+shadowgram-identity = { path = "../identity" }
+shadowgram-network = { path = "../network" }
+
+# Async
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+
+# Cryptography
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+zeroize.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+
+# Utilities
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+once_cell.workspace = true
+
+# MLS for groups
+openmls = { version = "0.6", optional = true }
+
+[features]
+default = []
+groups = ["openmls"]

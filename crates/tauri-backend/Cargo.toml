@@ -1,0 +1,41 @@
+[package]
+name = "shadowgram-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tauri backend for Shadowgram desktop application"
+
+[lib]
+name = "shadowgram_tauri"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+shadowgram-crypto = { path = "../crypto" }
+shadowgram-identity = { path = "../identity" }
+shadowgram-network = { path = "../network" }
+shadowgram-messenger = { path = "../messenger" }
+shadowgram-storage = { path = "../storage" }
+
+# Tauri
+tauri.workspace = true
+tauri-plugin-shell.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Utilities
+thiserror.workspace = true
+tracing.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

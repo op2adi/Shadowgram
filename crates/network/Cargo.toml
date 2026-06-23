@@ -1,0 +1,39 @@
+[package]
+name = "shadowgram-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Anonymous network layer for Shadowgram - Tor, mixnet, DHT discovery"
+
+[dependencies]
+shadowgram-crypto = { path = "../crypto" }
+shadowgram-identity = { path = "../identity" }
+
+# Tor
+arti-client.workspace = true
+tor-error.workspace = true
+
+# DHT / P2P
+libp2p.workspace = true
+libp2p-kad.workspace = true
+
+# Async
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# Serialization
+serde.workspace = true
+bincode.workspace = true
+bytes.workspace = true
+
+# Utilities
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+dashmap.workspace = true
+
+# Padding utils
+subtle.workspace = true

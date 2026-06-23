@@ -1,0 +1,33 @@
+[package]
+name = "shadowgram-identity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Identity management for Shadowgram - key generation, pairwise pseudonyms, QR codes"
+
+[dependencies]
+shadowgram-crypto = { path = "../crypto" }
+
+# Cryptography
+x25519-dalek.workspace = true
+ed25519-dalek.workspace = true
+
+# Zeroization
+zeroize.workspace = true
+
+# QR Codes
+qrcode.workspace = true
+image.workspace = true
+
+# Serialization
+serde.workspace = true
+base64.workspace = true
+hex.workspace = true
+
+# Utilities
+rand.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Multi-device
+threshold-secret-sharing = "0.1"

@@ -1,0 +1,18 @@
+# Shadowgram Fuzzing Artifacts
+
+## Crash Cases
+artifacts/
+
+## Corpus
+corpus/
+*-corpus/
+
+## Coverage
+coverage/
+
+## Build Output
+target/
+
+## OS Files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,33 @@
+[package]
+name = "shadowgram-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Secure storage layer for Shadowgram - SQLCipher, encrypted caches"
+
+[dependencies]
+shadowgram-crypto = { path = "../crypto" }
+shadowgram-identity = { path = "../identity" }
+shadowgram-messenger = { path = "../messenger" }
+
+# Storage
+rusqlite.workspace = true
+r2d2.workspace = true
+
+# Zeroization
+zeroize.workspace = true
+subtle.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Utilities
+thiserror.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+once_cell.workspace = true
+hex.workspace = true

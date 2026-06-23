@@ -1,0 +1,24 @@
+[package]
+name = "shadowgram-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shadowgram-crypto = { path = "../crates/crypto" }
+shadowgram-identity = { path = "../crates/identity" }
+shadowgram-network = { path = "../crates/network" }
+shadowgram-messenger = { path = "../crates/messenger" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "message_parse"
+path = "fuzz_targets/message_parse.rs"
+test = false
+doc = false
