@@ -1,3 +1,3 @@
 fn main() {
-    shadowgram_tauri::run()
+    shadowgram_app::run()
 }
