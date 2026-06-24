@@ -7,7 +7,6 @@ mod state;
 
 use tauri::{
     Manager,
-    generate_handler,
     generate_context,
 };
 
