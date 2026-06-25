@@ -19,18 +19,27 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm install
-
-      - run: cargo install tauri-cli
+      - run: npm ci
 
       - run: npm run tauri build
+
+      - name: List Windows bundle outputs
+        shell: pwsh
+        run: |
+          if (Test-Path "target/release/bundle") {
+            Get-ChildItem "target/release/bundle" -Recurse | Select-Object FullName
+          } else {
+            Write-Error "target/release/bundle was not created"
+          }
 
       - uses: actions/upload-artifact@v4
         with:
           name: shadowgram-windows
           path: |
-            src-tauri/target/release/bundle/**/*.msi
-            src-tauri/target/release/bundle/**/*.exe
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*.exe
+            target/release/*.exe
+          if-no-files-found: error
 
   build-linux:
     runs-on: ubuntu-24.04
@@ -53,15 +62,23 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - run: npm install
-
-      - run: cargo install tauri-cli
+      - run: npm ci
 
       - run: npm run tauri build
+
+      - name: List Linux bundle outputs
+        run: |
+          if [ -d target/release/bundle ]; then
+            find target/release/bundle -type f | sort
+          else
+            echo "target/release/bundle was not created" >&2
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: shadowgram-linux
           path: |
-            src-tauri/target/release/bundle/**/*.deb
-            src-tauri/target/release/bundle/**/*.AppImage
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.AppImage
+          if-no-files-found: error
