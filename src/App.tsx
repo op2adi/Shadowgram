@@ -194,11 +194,12 @@ function App() {
   }
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
-  const activeContact = activeChat
+  const matchedContact = activeChat
     ? contacts.find((contact) =>
       contact.fingerprint === activeChat.contact_fingerprint
       || contact.previous_fingerprints.includes(activeChat.contact_fingerprint))
     : null;
+  const activeContact = matchedContact ?? null;
   const isActiveChatStale = Boolean(
     activeChat
     && activeContact
