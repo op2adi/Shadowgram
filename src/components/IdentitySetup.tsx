@@ -3,9 +3,10 @@ import { invoke } from '@tauri-apps/api/core';
 
 interface IdentityResponse {
   fingerprint: string;
+  fingerprint_full: string;
   qr_data: string;
+  invite_payload: string;
   generation: number;
-  rotated_from: string[];
   created_at: number;
   updated_at: number;
 }
@@ -63,7 +64,7 @@ export default function IdentitySetup({ onIdentityCreated }: IdentitySetupProps)
             </button>
 
             <p className="text-muted text-sm">
-              This desktop shell stores the generated fingerprint in memory only.
+              This identity is written to the durable local profile and will be reused on the next launch.
             </p>
           </div>
         ) : (
@@ -74,9 +75,13 @@ export default function IdentitySetup({ onIdentityCreated }: IdentitySetupProps)
               <span className="text-muted">Fingerprint</span>
               <code>{identity.fingerprint}</code>
             </div>
+            <div className="fingerprint-display card">
+              <span className="text-muted">Full Fingerprint</span>
+              <code>{identity.fingerprint_full}</code>
+            </div>
             <div className="qr-placeholder card">
-              <span className="text-muted">QR Payload</span>
-              <code>{identity.qr_data}</code>
+              <span className="text-muted">Invite Payload</span>
+              <code>{identity.invite_payload}</code>
             </div>
             <div className="fingerprint-display card">
               <span className="text-muted">Generation</span>

@@ -162,17 +162,25 @@ impl ShamirSecretSharing {
     }
 
     // GF(256) Addition / Subtraction
-    fn gf_add(a: u8, b: u8) -> u8 { a ^ b }
-    fn gf_sub(a: u8, b: u8) -> u8 { a ^ b }
+    fn gf_add(a: u8, b: u8) -> u8 {
+        a ^ b
+    }
+    fn gf_sub(a: u8, b: u8) -> u8 {
+        a ^ b
+    }
 
     // GF(256) Multiplication
     fn gf_mul(mut a: u8, mut b: u8) -> u8 {
         let mut p = 0;
         for _ in 0..8 {
-            if (b & 1) != 0 { p ^= a; }
+            if (b & 1) != 0 {
+                p ^= a;
+            }
             let hi_bit_set = (a & 0x80) != 0;
             a <<= 1;
-            if hi_bit_set { a ^= 0x1B; } // x^8 + x^4 + x^3 + x + 1
+            if hi_bit_set {
+                a ^= 0x1B;
+            } // x^8 + x^4 + x^3 + x + 1
             b >>= 1;
         }
         p
@@ -180,9 +188,13 @@ impl ShamirSecretSharing {
 
     // GF(256) Inverse
     fn gf_inv(a: u8) -> u8 {
-        if a == 0 { return 0; }
+        if a == 0 {
+            return 0;
+        }
         for i in 1..=255 {
-            if Self::gf_mul(a, i) == 1 { return i; }
+            if Self::gf_mul(a, i) == 1 {
+                return i;
+            }
         }
         0
     }
@@ -262,12 +274,11 @@ impl MultiDeviceSync {
     }
 
     /// Split identity private key for multi-device access
-    pub fn split_identity_key(&self, private_key_bytes: &[u8]) -> Result<Vec<SecretShare>, ShareError> {
-        ShamirSecretSharing::split(
-            private_key_bytes,
-            self.config.threshold,
-            self.config.total,
-        )
+    pub fn split_identity_key(
+        &self,
+        private_key_bytes: &[u8],
+    ) -> Result<Vec<SecretShare>, ShareError> {
+        ShamirSecretSharing::split(private_key_bytes, self.config.threshold, self.config.total)
     }
 
     /// Reconstruct identity key from device shares

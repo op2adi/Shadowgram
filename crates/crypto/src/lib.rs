@@ -15,18 +15,18 @@
 //! All cryptographic operations use standard, audited implementations.
 //! No hidden randomness, no engineered weaknesses.
 
-pub mod key_exchange;
-pub mod double_ratchet;
 pub mod aead;
+pub mod double_ratchet;
 pub mod kdf;
+pub mod key_exchange;
 pub mod keys;
 
 // Re-export main types
-pub use key_exchange::{HybridKeypair, SharedSecret, KeyExchangeError};
-pub use double_ratchet::{DoubleRatchet, RatchetError, MessageKey};
-pub use aead::{AeadKey, AeadCipher, CipherError};
+pub use aead::{AeadCipher, AeadKey, CipherError};
+pub use double_ratchet::{DoubleRatchet, MessageKey, RatchetError};
 pub use kdf::KeyDerivation;
-pub use keys::{KeyStore, KeyMaterial, ZeroizeOnDrop};
+pub use key_exchange::{HybridKeypair, KeyExchangeError, SharedSecret};
+pub use keys::{KeyMaterial, KeyStore, ZeroizeOnDrop};
 
 // Crate version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -4,9 +4,9 @@
 //! real communication patterns. This defeats traffic analysis
 //! that tries to correlate send/receive times.
 
-use rand::{Rng, RngCore, rngs::OsRng};
-use tokio::time::Duration;
+use rand::{rngs::OsRng, Rng, RngCore};
 use thiserror::Error;
+use tokio::time::Duration;
 
 /// Cover traffic configuration
 #[derive(Clone)]
@@ -31,10 +31,10 @@ impl Default for TrafficConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            min_interval_ms: 1000,    // 1 second minimum
-            max_interval_ms: 10000,   // 10 seconds maximum
+            min_interval_ms: 1000,     // 1 second minimum
+            max_interval_ms: 10000,    // 10 seconds maximum
             activity_probability: 0.3, // 30% chance per slot
-            size_range: (64, 1024),   // 64B to 1KB cover messages
+            size_range: (64, 1024),    // 64B to 1KB cover messages
         }
     }
 }
@@ -131,10 +131,7 @@ impl CoverTraffic {
     fn pre_generate(&mut self) {
         if self.config.enabled && self.pending_message.is_none() {
             self.sequence += 1;
-            self.pending_message = Some(CoverMessage::new(
-                self.sequence,
-                self.config.size_range,
-            ));
+            self.pending_message = Some(CoverMessage::new(self.sequence, self.config.size_range));
         }
     }
 
@@ -300,8 +297,10 @@ impl AdaptiveCoverTraffic {
         let mut config = self.base_config.clone();
 
         // Adjust intervals based on multiplier
-        config.min_interval_ms = (self.base_config.min_interval_ms as f64 / self.rate_multiplier) as u64;
-        config.max_interval_ms = (self.base_config.max_interval_ms as f64 / self.rate_multiplier) as u64;
+        config.min_interval_ms =
+            (self.base_config.min_interval_ms as f64 / self.rate_multiplier) as u64;
+        config.max_interval_ms =
+            (self.base_config.max_interval_ms as f64 / self.rate_multiplier) as u64;
 
         config
     }

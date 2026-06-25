@@ -14,13 +14,13 @@
 //! - **Post-Compromise Security**: Ratchet healing restores security
 //! - **Deniable Authentication**: No cryptographic proof of sender identity
 
-use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
+use crate::{aead::AeadCipher, kdf::KeyDerivation};
 use rand::rngs::OsRng;
-use serde::{Serialize, Deserialize};
-use zeroize::Zeroize;
-use thiserror::Error;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::{kdf::KeyDerivation, aead::AeadCipher};
+use thiserror::Error;
+use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
+use zeroize::Zeroize;
 
 /// Errors that can occur during ratchet operations
 #[derive(Error, Debug)]
@@ -171,10 +171,8 @@ impl DoubleRatchet {
         let sending_dh_public = X25519PublicKey::from(&initial_dh);
 
         // Derive initial sending chain from root key
-        let sending_chain_bytes = KeyDerivation::derive_key(
-            &root_key,
-            b"shadowgram-sending-chain",
-        ).unwrap_or([0u8; 32]);
+        let sending_chain_bytes =
+            KeyDerivation::derive_key(&root_key, b"shadowgram-sending-chain").unwrap_or([0u8; 32]);
 
         Self {
             root_key,
@@ -198,10 +196,9 @@ impl DoubleRatchet {
         let sending_dh_public = X25519PublicKey::from(&initial_dh);
 
         // Derive initial receiving chain from root key
-        let receiving_chain_bytes = KeyDerivation::derive_key(
-            &root_key,
-            b"shadowgram-receiving-chain",
-        ).unwrap_or([0u8; 32]);
+        let receiving_chain_bytes =
+            KeyDerivation::derive_key(&root_key, b"shadowgram-receiving-chain")
+                .unwrap_or([0u8; 32]);
 
         Self {
             root_key,
@@ -217,12 +214,11 @@ impl DoubleRatchet {
     }
 
     /// Perform DH ratchet step when receiving message with new key
-    fn dh_ratchet(
-        &mut self,
-        remote_new_dh: &X25519PublicKey,
-    ) -> Result<[u8; 32], RatchetError> {
+    fn dh_ratchet(&mut self, remote_new_dh: &X25519PublicKey) -> Result<[u8; 32], RatchetError> {
         // Compute DH shared secret
-        let dh_shared = self.sending_dh.take()
+        let dh_shared = self
+            .sending_dh
+            .take()
             .ok_or(RatchetError::InvalidKey)?
             .diffie_hellman(remote_new_dh);
 
@@ -251,17 +247,13 @@ impl DoubleRatchet {
         let mk = self.sending_chain.next();
 
         // Encrypt with ChaCha20-Poly1305
-        let (ciphertext, _tag) = AeadCipher::encrypt_chacha20(
-            mk.key(),
-            mk.nonce(),
-            plaintext,
-            &[]
-        ).map_err(|e| RatchetError::DecryptionFailed(e.to_string()))?;
+        let (ciphertext, _tag) = AeadCipher::encrypt_chacha20(mk.key(), mk.nonce(), plaintext, &[])
+            .map_err(|e| RatchetError::DecryptionFailed(e.to_string()))?;
 
         let header = MessageHeader::from_dh_public(
             &self.sending_dh_public,
             self.sending_chain.counter() - 1, // Zero-indexed
-            0, // Increment when DH ratchet happens
+            0,                                // Increment when DH ratchet happens
         );
 
         Ok((ciphertext, header))
@@ -285,7 +277,8 @@ impl DoubleRatchet {
         }
 
         // Get the receiving chain (should exist after first message)
-        let receiving_chain = self.receiving_chain
+        let receiving_chain = self
+            .receiving_chain
             .as_mut()
             .ok_or(RatchetError::InvalidKey)?;
 
@@ -299,9 +292,10 @@ impl DoubleRatchet {
             } else {
                 // Need to derive skipped keys up to this point
                 self.derive_skipped_keys(remote_dh, header.counter)?;
-                self.skipped_keys.remove(&key)
+                self.skipped_keys
+                    .remove(&key)
                     .ok_or(RatchetError::TooManySkipped {
-                        count: self.skipped_keys.len()
+                        count: self.skipped_keys.len(),
                     })?
             }
         } else {
@@ -309,7 +303,13 @@ impl DoubleRatchet {
             let mk = receiving_chain.next();
 
             // Store skipped keys for future out-of-order messages
-            for (i, skipped_mk) in Self::derive_chain_keys(receiving_chain, header.counter - receiving_chain.counter() + 1).into_iter().enumerate() {
+            for (i, skipped_mk) in Self::derive_chain_keys(
+                receiving_chain,
+                header.counter - receiving_chain.counter() + 1,
+            )
+            .into_iter()
+            .enumerate()
+            {
                 let skip_key = (remote_dh, receiving_chain.counter() - 1 + i as u64);
                 if self.skipped_keys.len() < self.max_skip {
                     self.skipped_keys.insert(skip_key, skipped_mk);
@@ -335,19 +335,16 @@ impl DoubleRatchet {
         let new_root = self.dh_ratchet(&remote_new_dh)?;
 
         // Generate new receiving chain from root
-        let new_receiving_chain_bytes = KeyDerivation::derive_key(
-            &new_root,
-            b"shadowgram-receiving-chain",
-        ).unwrap_or([0u8; 32]);
+        let new_receiving_chain_bytes =
+            KeyDerivation::derive_key(&new_root, b"shadowgram-receiving-chain")
+                .unwrap_or([0u8; 32]);
 
         self.receiving_chain = Some(ChainKey::new(new_receiving_chain_bytes));
         self.receiving_dh = Some(remote_new_dh);
 
         // Generate new sending chain
-        let new_sending_chain_bytes = KeyDerivation::derive_key(
-            &new_root,
-            b"shadowgram-sending-chain",
-        ).unwrap_or([0u8; 32]);
+        let new_sending_chain_bytes =
+            KeyDerivation::derive_key(&new_root, b"shadowgram-sending-chain").unwrap_or([0u8; 32]);
 
         self.sending_chain = ChainKey::new(new_sending_chain_bytes);
 
@@ -382,17 +379,20 @@ impl DoubleRatchet {
             root_key: self.root_key.to_vec(),
             sending_chain: self.sending_chain.bytes.to_vec(),
             sending_counter: self.sending_chain.counter(),
-            receiving_chain: self.receiving_chain
+            receiving_chain: self
+                .receiving_chain
                 .as_ref()
                 .map(|c| c.bytes.to_vec())
                 .unwrap_or(vec![]),
-            receiving_counter: self.receiving_chain
+            receiving_counter: self
+                .receiving_chain
                 .as_ref()
                 .map(|c| c.counter())
                 .unwrap_or(0),
             last_dh_public: self.sending_dh_public.as_bytes().to_vec(),
             remote_dh_public: self.remote_dh_public.as_bytes().to_vec(),
-            skipped_keys: self.skipped_keys
+            skipped_keys: self
+                .skipped_keys
                 .iter()
                 .map(|((_, counter), mk)| (*counter, mk.key.to_vec()))
                 .collect(),
@@ -433,19 +433,19 @@ impl MessageHeader {
     }
 
     pub fn to_dh_public(&self) -> Result<X25519PublicKey, RatchetError> {
-        let bytes: [u8; 32] = self.dh_public.as_slice()
+        let bytes: [u8; 32] = self
+            .dh_public
+            .as_slice()
             .try_into()
             .map_err(|_| RatchetError::InvalidKey)?;
         Ok(X25519PublicKey::from(bytes))
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, RatchetError> {
-        bincode::serialize(self)
-            .map_err(|e| RatchetError::SerializationError(e.to_string()))
+        bincode::serialize(self).map_err(|e| RatchetError::SerializationError(e.to_string()))
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, RatchetError> {
-        bincode::deserialize(bytes)
-            .map_err(|e| RatchetError::SerializationError(e.to_string()))
+        bincode::deserialize(bytes).map_err(|e| RatchetError::SerializationError(e.to_string()))
     }
 }

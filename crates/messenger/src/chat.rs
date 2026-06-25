@@ -7,8 +7,8 @@
 //! - Message history (encrypted at rest)
 //! - Session metadata (created, last activity)
 
-use thiserror::Error;
 use shadowgram_crypto::double_ratchet::DoubleRatchet;
+use thiserror::Error;
 
 /// Chat errors
 #[derive(Error, Debug)]
@@ -161,14 +161,16 @@ impl ChatSession {
 
     /// Encrypt message with Double Ratchet
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, ChatError> {
-        let ratchet = self.ratchet.as_mut()
-            .ok_or(ChatError::SessionNotFound)?;
+        let ratchet = self.ratchet.as_mut().ok_or(ChatError::SessionNotFound)?;
 
-        let (ciphertext, header) = ratchet.encrypt(plaintext, b"")
+        let (ciphertext, header) = ratchet
+            .encrypt(plaintext, b"")
             .map_err(|e| ChatError::EncryptionError(e.to_string()))?;
 
         // Serialize header + ciphertext
-        let header_bytes = header.to_bytes().map_err(|e| ChatError::EncryptionError(e.to_string()))?;
+        let header_bytes = header
+            .to_bytes()
+            .map_err(|e| ChatError::EncryptionError(e.to_string()))?;
         let header_len = header_bytes.len() as u32;
         let mut output = header_len.to_le_bytes().to_vec();
         output.extend(header_bytes);
@@ -178,8 +180,7 @@ impl ChatSession {
 
     /// Decrypt message with Double Ratchet
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, ChatError> {
-        let ratchet = self.ratchet.as_mut()
-            .ok_or(ChatError::SessionNotFound)?;
+        let ratchet = self.ratchet.as_mut().ok_or(ChatError::SessionNotFound)?;
 
         if ciphertext.len() < 4 {
             return Err(ChatError::InvalidMessage("Message too short".into()));
@@ -192,10 +193,13 @@ impl ChatSession {
             return Err(ChatError::InvalidMessage("Message too short".into()));
         }
 
-        let header = shadowgram_crypto::double_ratchet::MessageHeader::from_bytes(&ciphertext[4..4+header_len])
-            .map_err(|e| ChatError::DecryptionError(e.to_string()))?;
+        let header = shadowgram_crypto::double_ratchet::MessageHeader::from_bytes(
+            &ciphertext[4..4 + header_len],
+        )
+        .map_err(|e| ChatError::DecryptionError(e.to_string()))?;
 
-        let plaintext = ratchet.decrypt(&ciphertext[4+header_len..], &header, b"")
+        let plaintext = ratchet
+            .decrypt(&ciphertext[4 + header_len..], &header, b"")
             .map_err(|e| ChatError::DecryptionError(e.to_string()))?;
 
         self.record_activity();
@@ -278,7 +282,10 @@ pub struct ChatStats {
 
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -287,10 +294,7 @@ mod tests {
 
     #[test]
     fn test_chat_session_creation() {
-        let session = ChatSession::new(
-            "our_fp".to_string(),
-            "their_fp".to_string(),
-        );
+        let session = ChatSession::new("our_fp".to_string(), "their_fp".to_string());
 
         assert_eq!(session.state(), &ChatState::New);
         assert_eq!(session.message_count(), 0);
@@ -298,10 +302,7 @@ mod tests {
 
     #[test]
     fn test_chat_session_activity() {
-        let mut session = ChatSession::new(
-            "our_fp".to_string(),
-            "their_fp".to_string(),
-        );
+        let mut session = ChatSession::new("our_fp".to_string(), "their_fp".to_string());
 
         session.record_activity();
         assert_eq!(session.message_count(), 1);
@@ -310,10 +311,7 @@ mod tests {
 
     #[test]
     fn test_chat_stale_detection() {
-        let mut session = ChatSession::new(
-            "our_fp".to_string(),
-            "their_fp".to_string(),
-        );
+        let mut session = ChatSession::new("our_fp".to_string(), "their_fp".to_string());
 
         // Not stale immediately
         assert!(!session.is_stale(7)); // 7 days threshold

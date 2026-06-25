@@ -90,7 +90,6 @@ jobs:
           name: shadowgram-linux
           path: |
             target/release/bundle/**/*.deb
-            target/release/bundle/**/*.AppImage
           if-no-files-found: error
 
   build-android:
@@ -131,9 +130,8 @@ jobs:
 
       - name: Initialize Android project
         run: |
-          if [ ! -d src-tauri/gen/android ]; then
-            npm run tauri android init -- --ci
-          fi
+          rm -rf src-tauri/gen/android
+          npm run tauri android init -- --ci
 
       - name: Build Android artifacts
         run: npm run tauri android build

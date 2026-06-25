@@ -9,9 +9,9 @@
 //! - WebRTC data channels (future)
 //! - Custom obfs4-like transport (future)
 
-use thiserror::Error;
-use bytes::{Bytes, BytesMut};
 use base64::Engine;
+use bytes::{Bytes, BytesMut};
+use thiserror::Error;
 
 /// Transport errors
 #[derive(Error, Debug)]
@@ -207,7 +207,8 @@ impl HttpPollTransport {
 
     /// Decode from base64
     fn decode_http(&self, frame: &[u8]) -> Result<Bytes, TransportError> {
-        let decoded = base64::prelude::BASE64_STANDARD.decode(frame)
+        let decoded = base64::prelude::BASE64_STANDARD
+            .decode(frame)
             .map_err(|e| TransportError::DecodingError(e.to_string()))?;
         Ok(Bytes::from(decoded))
     }
@@ -306,12 +307,16 @@ impl TransportSelector {
         }
 
         // Fall back to any available
-        self.available.iter().find(|t| t.is_available()).map(|t| t.as_ref())
+        self.available
+            .iter()
+            .find(|t| t.is_available())
+            .map(|t| t.as_ref())
     }
 
     /// Get all available transports
     pub fn all_available(&self) -> Vec<&dyn Transport> {
-        self.available.iter()
+        self.available
+            .iter()
             .filter(|t| t.is_available())
             .map(|t| t.as_ref())
             .collect()

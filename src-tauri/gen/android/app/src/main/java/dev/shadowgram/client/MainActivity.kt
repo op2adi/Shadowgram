@@ -1,4 +1,4 @@
-package dev.shadowgram.app
+package dev.shadowgram.client
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

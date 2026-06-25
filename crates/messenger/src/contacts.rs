@@ -3,9 +3,9 @@
 //! Contact storage and Private Set Intersection for finding contacts
 //! without revealing address books.
 
+use base64::Engine;
 use std::collections::HashMap;
 use thiserror::Error;
-use base64::Engine;
 
 /// Contact errors
 #[derive(Error, Debug)]
@@ -66,11 +66,7 @@ pub struct Contact {
 
 impl Contact {
     /// Create new contact from public identity
-    pub fn new(
-        fingerprint: String,
-        alias: String,
-        public_identity: Vec<u8>,
-    ) -> Self {
+    pub fn new(fingerprint: String, alias: String, public_identity: Vec<u8>) -> Self {
         Self {
             fingerprint,
             alias,
@@ -258,7 +254,10 @@ fn blake3_hash(input: &[u8]) -> [u8; 32] {
 /// Helper for current timestamp
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// Contact import/export format
@@ -294,11 +293,7 @@ mod tests {
 
     #[test]
     fn test_contact_creation() {
-        let contact = Contact::new(
-            "abc123".to_string(),
-            "Alice".to_string(),
-            vec![1, 2, 3],
-        );
+        let contact = Contact::new("abc123".to_string(), "Alice".to_string(), vec![1, 2, 3]);
 
         assert_eq!(contact.alias, "Alice");
         assert_eq!(contact.trust_level, TrustLevel::Unverified);

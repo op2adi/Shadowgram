@@ -142,9 +142,7 @@ impl RelayPool {
 
     /// Get all active relays
     pub fn active_relays(&self) -> Vec<&RelayNode> {
-        self.relays.values()
-            .filter(|r| r.active)
-            .collect()
+        self.relays.values().filter(|r| r.active).collect()
     }
 
     /// Select best relays for multi-path routing
@@ -153,7 +151,9 @@ impl RelayPool {
 
         // Sort by score (descending)
         scored.sort_by(|a, b| {
-            b.score().partial_cmp(&a.score()).unwrap_or(std::cmp::Ordering::Equal)
+            b.score()
+                .partial_cmp(&a.score())
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Take top N
@@ -178,7 +178,7 @@ impl RelayPool {
         let relay_id = result.relay_id.clone();
         let success = result.success;
         let latency_ms = result.latency_ms;
-        
+
         self.path_history.push(result);
 
         // Keep only recent history
@@ -204,7 +204,9 @@ impl RelayPool {
     /// Get pool statistics
     pub fn stats(&self) -> RelayPoolStats {
         let active = self.active_relays().len();
-        let avg_score = self.relays.values()
+        let avg_score = self
+            .relays
+            .values()
             .filter(|r| r.active)
             .map(|r| r.score())
             .sum::<f64>()
@@ -268,10 +270,7 @@ impl MultiPathRouting {
     }
 
     /// Send message via all paths
-    pub async fn send_multi_path(
-        &self,
-        _message: &[u8],
-    ) -> Result<SendResult, RelayError> {
+    pub async fn send_multi_path(&self, _message: &[u8]) -> Result<SendResult, RelayError> {
         let paths = self.build_paths()?;
 
         if paths.is_empty() {
@@ -290,10 +289,7 @@ impl MultiPathRouting {
     }
 
     /// Send and wait for first successful delivery
-    pub async fn send_first_wins(
-        &self,
-        _message: &[u8],
-    ) -> Result<SendResult, RelayError> {
+    pub async fn send_first_wins(&self, _message: &[u8]) -> Result<SendResult, RelayError> {
         let paths = self.build_paths()?;
 
         if paths.is_empty() {
@@ -352,7 +348,11 @@ impl PathStrategy {
             PathStrategy::Random => pool.select_random_relays(count),
             PathStrategy::LeastLoaded => {
                 let mut relays = pool.active_relays();
-                relays.sort_by(|a, b| a.load.partial_cmp(&b.load).unwrap_or(std::cmp::Ordering::Equal));
+                relays.sort_by(|a, b| {
+                    a.load
+                        .partial_cmp(&b.load)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
                 relays.into_iter().take(count).collect()
             }
             PathStrategy::LowestLatency => {

@@ -8,9 +8,9 @@
 //! Note: Arti is still in development. This implementation uses
 //! the stable client APIs.
 
-use arti_client::{TorClient, TorClientConfig, StreamPrefs};
-use thiserror::Error;
+use arti_client::{StreamPrefs, TorClient, TorClientConfig};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// Tor transport errors
 #[derive(Error, Debug)]
@@ -51,14 +51,16 @@ impl OnionAddress {
 
         // Validate format (16 chars for v2, 56 chars for v3)
         if clean_address.len() != 16 && clean_address.len() != 56 {
-            return Err(TorError::InvalidOnionAddress(
-                format!("Invalid onion address length: {}", clean_address.len())
-            ));
+            return Err(TorError::InvalidOnionAddress(format!(
+                "Invalid onion address length: {}",
+                clean_address.len()
+            )));
         }
 
         // Parse port if present
         let (hostname, port) = if let Some((host, port_str)) = clean_address.split_once(':') {
-            let port = port_str.parse::<u16>()
+            let port = port_str
+                .parse::<u16>()
                 .map_err(|_| TorError::InvalidOnionAddress("Invalid port".into()))?;
             (host.to_string(), port)
         } else {
@@ -80,9 +82,10 @@ impl OnionAddress {
 
         // Validate hostname
         if clean_hostname.len() != 16 && clean_hostname.len() != 56 {
-            return Err(TorError::InvalidOnionAddress(
-                format!("Invalid onion hostname length: {}", clean_hostname.len())
-            ));
+            return Err(TorError::InvalidOnionAddress(format!(
+                "Invalid onion hostname length: {}",
+                clean_hostname.len()
+            )));
         }
 
         Ok(Self {
@@ -169,14 +172,13 @@ impl TorTransport {
 
     /// Connect to an onion service
     pub async fn connect(&self, address: &OnionAddress) -> Result<TorStream, TorError> {
-        let client = self.client
-            .as_ref()
-            .ok_or(TorError::NotInitialized)?;
+        let client = self.client.as_ref().ok_or(TorError::NotInitialized)?;
 
         let _stream_prefs = StreamPrefs::new();
         // In production, could set specific stream preferences here
 
-        client.connect(&address.full_address)
+        client
+            .connect(&address.full_address)
             .await
             .map(|stream| TorStream { inner: stream })
             .map_err(|e| TorError::ConnectionFailed(e.to_string()))
@@ -226,9 +228,9 @@ impl TorStream {
     }
 }
 
-use tokio::io::{AsyncRead, AsyncWrite};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 impl AsyncRead for TorStream {
     fn poll_read(

@@ -29,7 +29,7 @@ pub struct CacheEntry {
 impl CacheEntry {
     pub fn new(data: Vec<u8>, ttl: Option<Duration>) -> Self {
         // Generate random nonce
-        use rand::{RngCore, rngs::OsRng};
+        use rand::{rngs::OsRng, RngCore};
         let mut nonce = [0u8; 12];
         OsRng.fill_bytes(&mut nonce);
 
@@ -118,7 +118,8 @@ impl EncryptedCache {
         // Evict if at capacity
         if entries.len() >= self.config.max_entries && !entries.contains_key(&key) {
             // Remove oldest entry
-            if let Some(oldest) = entries.iter()
+            if let Some(oldest) = entries
+                .iter()
                 .min_by_key(|(_, e)| e.created_at)
                 .map(|(k, _)| k.clone())
             {
@@ -279,7 +280,11 @@ mod tests {
         let cache = EncryptedCache::new();
 
         // Set with very short TTL
-        cache.set("key1".to_string(), vec![1, 2, 3], Some(Duration::from_millis(10)));
+        cache.set(
+            "key1".to_string(),
+            vec![1, 2, 3],
+            Some(Duration::from_millis(10)),
+        );
 
         // Should exist immediately
         assert!(cache.contains("key1"));

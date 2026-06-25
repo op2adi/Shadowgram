@@ -2,11 +2,11 @@
 //!
 //! SQLite with SQLCipher page-level encryption.
 
-use rusqlite::{Connection, OptionalExtension, params};
-use thiserror::Error;
 use parking_lot::RwLock;
+use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Arc;
+use thiserror::Error;
 
 /// Database errors
 #[derive(Error, Debug)]
@@ -102,11 +102,13 @@ impl Database {
         let conn = Connection::open_in_memory()?;
 
         // Set basic pragmas
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             PRAGMA journal_mode=WAL;
             PRAGMA foreign_keys=ON;
             PRAGMA busy_timeout=5000;
-        ")?;
+        ",
+        )?;
 
         *self.conn.write() = conn;
         self.open = true;
@@ -169,26 +171,25 @@ impl Database {
     }
 
     /// Load identity
-    pub fn load_identity(
-        &self,
-        fingerprint: &str,
-    ) -> Result<Option<IdentityRow>, DbError> {
+    pub fn load_identity(&self, fingerprint: &str) -> Result<Option<IdentityRow>, DbError> {
         let conn = self.conn.read();
 
-        let row = conn.query_row(
-            "SELECT fingerprint, public_identity, encrypted_private_key, created_at, rotated_at
+        let row = conn
+            .query_row(
+                "SELECT fingerprint, public_identity, encrypted_private_key, created_at, rotated_at
              FROM identities WHERE fingerprint = ?1",
-            params![fingerprint],
-            |r| {
-                Ok(IdentityRow {
-                    fingerprint: r.get(0)?,
-                    public_identity: r.get(1)?,
-                    encrypted_private_key: r.get(2)?,
-                    created_at: r.get(3)?,
-                    rotated_at: r.get(4)?,
-                })
-            }
-        ).optional()?;
+                params![fingerprint],
+                |r| {
+                    Ok(IdentityRow {
+                        fingerprint: r.get(0)?,
+                        public_identity: r.get(1)?,
+                        encrypted_private_key: r.get(2)?,
+                        created_at: r.get(3)?,
+                        rotated_at: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
 
         Ok(row)
     }
@@ -219,27 +220,26 @@ impl Database {
     }
 
     /// Get contact
-    pub fn get_contact(
-        &self,
-        fingerprint: &str,
-    ) -> Result<Option<ContactRow>, DbError> {
+    pub fn get_contact(&self, fingerprint: &str) -> Result<Option<ContactRow>, DbError> {
         let conn = self.conn.read();
 
-        let row = conn.query_row(
-            "SELECT fingerprint, alias, public_identity, trust_level, added_at, last_seen
+        let row = conn
+            .query_row(
+                "SELECT fingerprint, alias, public_identity, trust_level, added_at, last_seen
              FROM contacts WHERE fingerprint = ?1",
-            params![fingerprint],
-            |r| {
-                Ok(ContactRow {
-                    fingerprint: r.get(0)?,
-                    alias: r.get(1)?,
-                    public_identity: r.get(2)?,
-                    trust_level: r.get(3)?,
-                    added_at: r.get(4)?,
-                    last_seen: r.get(5)?,
-                })
-            }
-        ).optional()?;
+                params![fingerprint],
+                |r| {
+                    Ok(ContactRow {
+                        fingerprint: r.get(0)?,
+                        alias: r.get(1)?,
+                        public_identity: r.get(2)?,
+                        trust_level: r.get(3)?,
+                        added_at: r.get(4)?,
+                        last_seen: r.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
 
         Ok(row)
     }
@@ -285,7 +285,7 @@ impl Database {
              FROM messages
              WHERE conversation_id = ?1
              ORDER BY sequence DESC
-             LIMIT ?2 OFFSET ?3"
+             LIMIT ?2 OFFSET ?3",
         )?;
 
         let rows = stmt.query_map(params![conversation_id, limit, offset], |r| {
@@ -305,23 +305,14 @@ impl Database {
     pub fn stats(&self) -> Result<DbStats, DbError> {
         let conn = self.conn.read();
 
-        let identity_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM identities",
-            [],
-            |r| r.get(0),
-        )?;
+        let identity_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM identities", [], |r| r.get(0))?;
 
-        let contact_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM contacts",
-            [],
-            |r| r.get(0),
-        )?;
+        let contact_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM contacts", [], |r| r.get(0))?;
 
-        let message_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM messages",
-            [],
-            |r| r.get(0),
-        )?;
+        let message_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
 
         Ok(DbStats {
             identity_count: identity_count as usize,
@@ -379,7 +370,10 @@ pub struct DbStats {
 
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 #[cfg(test)]

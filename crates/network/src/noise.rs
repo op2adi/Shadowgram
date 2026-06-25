@@ -7,11 +7,11 @@
 //! Based on Noise_IKpsk2 pattern for mutual authentication with
 //! pre-shared symmetric key.
 
+use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, Key as ChachaKey, KeyInit, Nonce};
 use rand::rngs::OsRng;
-use x25519_dalek::{StaticSecret, PublicKey};
-use chacha20poly1305::{ChaCha20Poly1305, Key as ChachaKey, Nonce, KeyInit, aead::Aead};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 /// Noise protocol errors
 #[derive(Error, Debug)]
@@ -48,21 +48,21 @@ enum HandshakeState {
 
     /// Initiator has sent handshake message
     InitiatorSent {
-        s: StaticSecret,      // Our static key
-        e: StaticSecret,      // Our ephemeral key
+        s: StaticSecret,       // Our static key
+        e: StaticSecret,       // Our ephemeral key
         re: Option<PublicKey>, // Their ephemeral key
-        ch: [u8; 32],         // Chain key
-        k: Option<[u8; 32]>,  // Current key
+        ch: [u8; 32],          // Chain key
+        k: Option<[u8; 32]>,   // Current key
     },
 
     /// Responder received handshake
     ResponderReceived {
-        s: StaticSecret,      // Our static key
-        e: StaticSecret,      // Our ephemeral key
+        s: StaticSecret,       // Our static key
+        e: StaticSecret,       // Our ephemeral key
         rs: Option<PublicKey>, // Their static key
         re: Option<PublicKey>, // Our ephemeral (generated)
-        ch: [u8; 32],         // Chain key
-        k: Option<[u8; 32]>,  // Current key
+        ch: [u8; 32],          // Chain key
+        k: Option<[u8; 32]>,   // Current key
     },
 
     /// Handshake complete
@@ -83,15 +83,15 @@ struct CipherState {
 
 impl CipherState {
     fn new(key: [u8; 32]) -> Self {
-        Self { k: key, n: 0, rn: 0 }
+        Self {
+            k: key,
+            n: 0,
+            rn: 0,
+        }
     }
 
     /// Encrypt message with associated data
-    fn encrypt_with_ad(
-        &mut self,
-        _ad: &[u8],
-        plaintext: &[u8],
-    ) -> Result<Vec<u8>, NoiseError> {
+    fn encrypt_with_ad(&mut self, _ad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, NoiseError> {
         let key = ChachaKey::from_slice(&self.k);
         let cipher = ChaCha20Poly1305::new(key);
 
@@ -109,11 +109,7 @@ impl CipherState {
     }
 
     /// Decrypt message with associated data
-    fn decrypt_with_ad(
-        &mut self,
-        _ad: &[u8],
-        ciphertext: &[u8],
-    ) -> Result<Vec<u8>, NoiseError> {
+    fn decrypt_with_ad(&mut self, _ad: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, NoiseError> {
         let key = ChachaKey::from_slice(&self.k);
         let cipher = ChaCha20Poly1305::new(key);
 
@@ -138,11 +134,7 @@ impl NoiseIK {
     /// * `s` - Our static private key
     /// * `rs` - Their static public key (known ahead of time)
     /// * `psk` - Pre-shared key
-    pub fn new_initiator(
-        _s: StaticSecret,
-        _rs: PublicKey,
-        _psk: &[u8; 32],
-    ) -> Self {
+    pub fn new_initiator(_s: StaticSecret, _rs: PublicKey, _psk: &[u8; 32]) -> Self {
         // Initialize handshake state
         // In production, would follow Noise_IKpsk2 pattern exactly
 
@@ -231,7 +223,8 @@ impl NoiseIK {
 
     /// Encrypt application data
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, NoiseError> {
-        let cipher = self.cipher
+        let cipher = self
+            .cipher
             .as_mut()
             .ok_or_else(|| NoiseError::InvalidState("Handshake not complete".into()))?;
 
@@ -240,7 +233,8 @@ impl NoiseIK {
 
     /// Decrypt application data
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, NoiseError> {
-        let cipher = self.cipher
+        let cipher = self
+            .cipher
             .as_mut()
             .ok_or_else(|| NoiseError::InvalidState("Handshake not complete".into()))?;
 
@@ -300,11 +294,7 @@ impl NoiseBuilder {
         self
     }
 
-    pub fn build_initiator(
-        self,
-        s: StaticSecret,
-        rs: PublicKey,
-    ) -> Result<NoiseIK, NoiseError> {
+    pub fn build_initiator(self, s: StaticSecret, rs: PublicKey) -> Result<NoiseIK, NoiseError> {
         // Hash protocol name for initial chain key
         let mut hasher = Sha256::new();
         hasher.update(self.protocol_name.as_bytes());
@@ -318,10 +308,7 @@ impl NoiseBuilder {
     }
 
     pub fn build_responder(self, s: StaticSecret) -> Result<NoiseIK, NoiseError> {
-        Ok(NoiseIK::new_responder(
-            s,
-            &self.psk.unwrap_or([0u8; 32]),
-        ))
+        Ok(NoiseIK::new_responder(s, &self.psk.unwrap_or([0u8; 32])))
     }
 }
 
@@ -376,17 +363,10 @@ mod tests {
         let psk = [1u8; 32];
 
         // Initiator creates handshake
-        let mut initiator = NoiseIK::new_initiator(
-            initiator_static,
-            responder_public,
-            &psk,
-        );
+        let mut initiator = NoiseIK::new_initiator(initiator_static, responder_public, &psk);
 
         // Responder creates handshake
-        let mut responder = NoiseIK::new_responder(
-            responder_static,
-            &psk,
-        );
+        let mut responder = NoiseIK::new_responder(responder_static, &psk);
 
         // In production, would run full handshake:
         // 1. Initiator writes message A

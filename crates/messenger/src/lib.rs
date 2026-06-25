@@ -6,25 +6,25 @@
 //! - Contact discovery
 //! - Multi-device synchronization
 
-pub mod client;
 pub mod chat;
+pub mod client;
+pub mod contacts;
 pub mod group;
 pub mod message;
-pub mod contacts;
-pub mod sync;
 pub mod psi;
+pub mod sync;
 
 // Re-exports
+pub use chat::{Chat, ChatError, ChatSession, ChatState, ChatStats};
 pub use client::{Client, ClientConfig, ClientError};
-pub use chat::{Chat, ChatSession, ChatError, ChatState, ChatStats};
+pub use contacts::{Contact, ContactDiscovery, ContactStore, MemoryContactStore, TrustLevel};
+pub use group::{Commit, GroupError, GroupInfo, GroupMember, GroupState, MemberRole};
 pub use message::{
-    Message, MessageEnvelope, MessageStatus, MessageType,
-    MessageDirection, MessageBatch, MessagePriority, MessageHeader, MessageError,
+    Message, MessageBatch, MessageDirection, MessageEnvelope, MessageError, MessageHeader,
+    MessagePriority, MessageStatus, MessageType,
 };
-pub use contacts::{Contact, ContactStore, MemoryContactStore, ContactDiscovery, TrustLevel};
-pub use group::{GroupState, GroupInfo, GroupMember, MemberRole, Commit, GroupError};
-pub use sync::{DeviceSync, SyncError, SyncStatus, DeviceInfo, SyncOperation};
-pub use psi::{PsiProtocol, ContactDiscoveryPSI, PsiResult, ContactFingerprint};
+pub use psi::{ContactDiscoveryPSI, ContactFingerprint, PsiProtocol, PsiResult};
+pub use sync::{DeviceInfo, DeviceSync, SyncError, SyncOperation, SyncStatus};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

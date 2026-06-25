@@ -3,12 +3,11 @@
 //! IPC bridge between React frontend and Rust core.
 
 mod commands;
+mod profile;
 mod state;
+mod transport;
 
-use tauri::{
-    Manager,
-    generate_context,
-};
+use tauri::{generate_context, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,8 +16,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // Initialize app state
-            let app_state = state::AppState::new()?;
+            let profile_name =
+                std::env::var("SHADOWGRAM_PROFILE").unwrap_or_else(|_| "default".to_string());
+            let profile_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("profiles")
+                .join(profile_name);
+            let app_state = state::AppState::new(profile_dir)?;
             app.manage(app_state);
 
             println!("Shadowgram initialized successfully");
@@ -28,7 +34,7 @@ pub fn run() {
             commands::ping,
             commands::get_version,
             commands::create_identity,
-            commands::rotate_identity,
+            commands::reset_identity,
             commands::get_identity,
             commands::export_identity_qr,
             commands::scan_identity_qr,
@@ -40,6 +46,7 @@ pub fn run() {
             commands::get_chats,
             commands::send_message,
             commands::get_messages,
+            commands::get_diagnostics,
             commands::start_client,
             commands::stop_client,
         ])

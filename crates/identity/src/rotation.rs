@@ -105,10 +105,13 @@ impl IdentityRotator {
     }
 
     /// Rotate identity, returning old -> new mapping
-    pub fn rotate_identity(&mut self, old_identity: &Identity) -> Result<RotationResult, RotationError> {
+    pub fn rotate_identity(
+        &mut self,
+        old_identity: &Identity,
+    ) -> Result<RotationResult, RotationError> {
         // Generate new identity
-        let new_identity = Identity::generate()
-            .map_err(|e| RotationError::GenerationFailed(e.to_string()))?;
+        let new_identity =
+            Identity::generate().map_err(|e| RotationError::GenerationFailed(e.to_string()))?;
 
         // Record transition
         let old_fp = old_identity.public().fingerprint_full.clone();
@@ -147,7 +150,10 @@ pub struct RotationResult {
 }
 
 fn current_timestamp() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -172,7 +178,10 @@ mod tests {
 
         let result = rotator.rotate_identity(&old_identity).unwrap();
 
-        assert_ne!(result.old_fingerprint, result.new_identity.public().fingerprint_full);
+        assert_ne!(
+            result.old_fingerprint,
+            result.new_identity.public().fingerprint_full
+        );
         assert!(rotator.is_transitioning(&result.old_fingerprint));
     }
 }

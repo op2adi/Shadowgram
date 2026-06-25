@@ -2,9 +2,9 @@
 //!
 //! Message structures for the Shadowgram protocol.
 
-use serde::{Serialize, Deserialize};
-use zeroize::Zeroize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::Zeroize;
 
 /// Message status
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,7 +158,7 @@ impl Message {
 }
 
 fn uuid_v4() -> String {
-    use rand::{RngCore, rngs::OsRng};
+    use rand::{rngs::OsRng, RngCore};
     let mut bytes = [0u8; 16];
     OsRng.fill_bytes(&mut bytes);
     format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
@@ -171,16 +171,15 @@ fn uuid_v4() -> String {
 
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 impl MessageEnvelope {
     /// Create new envelope
-    pub fn new(
-        sender: Vec<u8>,
-        conversation_id: Vec<u8>,
-        sequence: u64,
-    ) -> Self {
+    pub fn new(sender: Vec<u8>, conversation_id: Vec<u8>, sequence: u64) -> Self {
         Self {
             version: 1,
             sender,
@@ -222,7 +221,7 @@ impl MessageEnvelope {
         if current_size < target_size {
             self.padding = vec![0u8; target_size - current_size];
             // Fill with random bytes
-            use rand::{RngCore, rngs::OsRng};
+            use rand::{rngs::OsRng, RngCore};
             OsRng.fill_bytes(&mut self.padding);
         }
     }
@@ -240,9 +239,14 @@ impl MessageEnvelope {
     /// Get total size of serialized envelope
     pub fn serialized_size(&self) -> usize {
         // Approximate size
-        1 + self.sender.len() + self.conversation_id.len() + 8 + 4
-            + self.ciphertext.len() + self.auth_tag.len()
-            + self.header.len() + self.padding.len()
+        1 + self.sender.len()
+            + self.conversation_id.len()
+            + 8
+            + 4
+            + self.ciphertext.len()
+            + self.auth_tag.len()
+            + self.header.len()
+            + self.padding.len()
     }
 }
 
@@ -431,11 +435,7 @@ mod tests {
 
     #[test]
     fn test_envelope_serialization() {
-        let mut env = MessageEnvelope::new(
-            vec![1, 2, 3],
-            vec![4, 5, 6],
-            1,
-        );
+        let mut env = MessageEnvelope::new(vec![1, 2, 3], vec![4, 5, 6], 1);
         env.set_payload(vec![7, 8, 9], vec![10, 11, 12]);
 
         let serialized = env.serialize().unwrap();

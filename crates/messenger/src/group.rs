@@ -3,14 +3,17 @@
 //! Full implementation of Messaging Layer Security (MLS) protocol
 //! for secure group messaging with post-compromise security.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
-use serde::{Serialize, Deserialize};
 use zeroize::Zeroize;
 
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 /// Group chat errors
@@ -158,7 +161,8 @@ impl RatchetTree {
 
     /// Remove a leaf node (member left)
     fn remove_leaf(&mut self, member_fingerprint: &str) -> Result<(), GroupError> {
-        let leaf_index = self.leaf_indices
+        let leaf_index = self
+            .leaf_indices
             .remove(member_fingerprint)
             .ok_or(GroupError::MemberNotFound(member_fingerprint.to_string()))?;
 
@@ -295,7 +299,11 @@ pub struct PathUpdate {
 
 impl GroupState {
     /// Create new group
-    pub fn create(info: GroupInfo, creator_fingerprint: String, creator_key_package: Vec<u8>) -> Self {
+    pub fn create(
+        info: GroupInfo,
+        creator_fingerprint: String,
+        creator_key_package: Vec<u8>,
+    ) -> Self {
         let mut tree = RatchetTree::new();
         let leaf_index = tree.add_leaf(creator_fingerprint.clone(), &creator_key_package);
 
@@ -322,15 +330,10 @@ impl GroupState {
     }
 
     /// Add member to group
-    pub fn add_member(
-        &mut self,
-        new_member: GroupMember,
-    ) -> Result<Commit, GroupError> {
+    pub fn add_member(&mut self, new_member: GroupMember) -> Result<Commit, GroupError> {
         // Add to tree
-        self.tree.add_leaf(
-            new_member.fingerprint.clone(),
-            &new_member.key_package,
-        );
+        self.tree
+            .add_leaf(new_member.fingerprint.clone(), &new_member.key_package);
 
         // Add to members list
         self.members.push(new_member);
@@ -352,14 +355,16 @@ impl GroupState {
     /// Remove member from group
     pub fn remove_member(&mut self, fingerprint: &str) -> Result<Commit, GroupError> {
         // Find member
-        let member_idx = self.members.iter()
+        let member_idx = self
+            .members
+            .iter()
             .position(|m| m.fingerprint == fingerprint)
             .ok_or_else(|| GroupError::MemberNotFound(fingerprint.to_string()))?;
 
         // Check if trying to remove creator
         if self.members[member_idx].role == MemberRole::Creator {
             return Err(GroupError::NotAuthorized(
-                "Cannot remove group creator".to_string()
+                "Cannot remove group creator".to_string(),
             ));
         }
 
@@ -391,9 +396,11 @@ impl GroupState {
         }
 
         // Update member record
-        if let Some(member) = self.members.iter_mut().find(|m| {
-            self.tree.leaf_indices.get(&m.fingerprint) == Some(&self.my_leaf_index)
-        }) {
+        if let Some(member) = self
+            .members
+            .iter_mut()
+            .find(|m| self.tree.leaf_indices.get(&m.fingerprint) == Some(&self.my_leaf_index))
+        {
             member.key_package = new_key_package.to_vec();
         }
 
@@ -436,7 +443,8 @@ impl GroupState {
 
     /// Check if member is admin or creator
     pub fn is_admin(&self, fingerprint: &str) -> bool {
-        self.members.iter()
+        self.members
+            .iter()
             .find(|m| m.fingerprint == fingerprint && m.left_at.is_none())
             .map(|m| matches!(m.role, MemberRole::Admin | MemberRole::Creator))
             .unwrap_or(false)
@@ -522,7 +530,11 @@ impl GroupChat {
     }
 
     /// Decrypt message from group
-    pub fn decrypt_message(&mut self, ciphertext: &[u8], msg_id: u64) -> Result<Vec<u8>, GroupError> {
+    pub fn decrypt_message(
+        &mut self,
+        ciphertext: &[u8],
+        msg_id: u64,
+    ) -> Result<Vec<u8>, GroupError> {
         // Check for duplicate
         if self.received_messages.contains(&msg_id) {
             return Err(GroupError::DecryptionError("Duplicate message".into()));
@@ -578,12 +590,7 @@ mod tests {
 
     #[test]
     fn test_add_member() {
-        let mut chat = GroupChat::create(
-            "g1".to_string(),
-            "c1".to_string(),
-            vec![1, 2, 3],
-            None,
-        );
+        let mut chat = GroupChat::create("g1".to_string(), "c1".to_string(), vec![1, 2, 3], None);
 
         let new_member = GroupMember {
             fingerprint: "m1".to_string(),
@@ -602,12 +609,7 @@ mod tests {
 
     #[test]
     fn test_remove_member() {
-        let mut chat = GroupChat::create(
-            "g1".to_string(),
-            "c1".to_string(),
-            vec![1, 2, 3],
-            None,
-        );
+        let mut chat = GroupChat::create("g1".to_string(), "c1".to_string(), vec![1, 2, 3], None);
 
         // Add member first
         let member = GroupMember {
@@ -630,12 +632,7 @@ mod tests {
 
     #[test]
     fn test_message_encryption() {
-        let mut chat = GroupChat::create(
-            "g1".to_string(),
-            "c1".to_string(),
-            vec![1, 2, 3],
-            None,
-        );
+        let mut chat = GroupChat::create("g1".to_string(), "c1".to_string(), vec![1, 2, 3], None);
 
         let plaintext = b"Hello, group!";
         let ciphertext = chat.encrypt_message(plaintext).unwrap();
@@ -648,12 +645,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_detection() {
-        let mut chat = GroupChat::create(
-            "g1".to_string(),
-            "c1".to_string(),
-            vec![1, 2, 3],
-            None,
-        );
+        let mut chat = GroupChat::create("g1".to_string(), "c1".to_string(), vec![1, 2, 3], None);
 
         let plaintext = b"Hello!";
         let ciphertext = chat.encrypt_message(plaintext).unwrap();
@@ -667,12 +659,7 @@ mod tests {
 
     #[test]
     fn test_key_update() {
-        let mut chat = GroupChat::create(
-            "g1".to_string(),
-            "c1".to_string(),
-            vec![1, 2, 3],
-            None,
-        );
+        let mut chat = GroupChat::create("g1".to_string(), "c1".to_string(), vec![1, 2, 3], None);
 
         let result = chat.update_keys(&[7, 8, 9]);
         assert!(result.is_ok());

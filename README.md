@@ -77,18 +77,20 @@ apt install libwebkit2gtk-4.0-dev libgtk-3-dev libssl-dev
 ### Build Commands
 
 ```bash
-# Build all crates
-cargo build --release
+# Install JS dependencies
+npm ci
 
-# Run all tests
-cargo test
+# Build the React frontend
+npm run build
 
-# Build frontend
-npm install && npm run build
+# Run the Shadowgram shell tests
+cargo test -p shadowgram-app --lib -- --nocapture
 
-# Build Tauri app
+# Build the desktop bundle
 npm run tauri build
 ```
+
+On Linux, the default bundle target in this repo is `.deb` so the standard build does not depend on `linuxdeploy` for AppImage packaging.
 
 ### Android Build
 
@@ -100,21 +102,37 @@ Tauri mobile support needs the Android toolchain configured first. The official 
 Local Android flow:
 
 ```bash
-# one-time project generation
-npm run android:init
+# install Rust Android targets once
+rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+
+# regenerate the Android wrapper when identifier/package settings change
+rm -rf src-tauri/gen/android
+npm run tauri android init -- --ci
 
 # debug on device/emulator
-npm run android:dev
+npm run tauri android dev
 
 # release artifacts (APK / AAB)
-npm run android:build
+npm run tauri android build
 ```
 
 The GitHub Actions workflow now has a `build-android` job that:
 
-- initializes `src-tauri/gen/android` when it is missing
+- removes stale `src-tauri/gen/android` output before regeneration
+- initializes `src-tauri/gen/android` with `npm run tauri android init -- --ci`
 - builds the Android target with `npm run tauri android build`
 - uploads generated `.apk` and `.aab` artifacts
+
+### Docker Verification
+
+If you are using the prepared container from this workspace, run builds inside it:
+
+```bash
+docker exec adiclaude bash -lc 'cd /workspace/tmp/newapp && npm ci && npm run build'
+docker exec adiclaude bash -lc 'cd /workspace/tmp/newapp && cargo test -p shadowgram-app --lib -- --nocapture'
+docker exec adiclaude bash -lc 'cd /workspace/tmp/newapp && npm run tauri build'
+docker exec adiclaude bash -lc 'cd /workspace/tmp/newapp && rm -rf src-tauri/gen/android && npm run tauri android init -- --ci && npm run tauri android build'
+```
 
 Unsigned APKs can still be uploaded as CI artifacts, but Play Store distribution requires keystore configuration in the generated Android Gradle project.
 

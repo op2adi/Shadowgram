@@ -15,13 +15,13 @@
 pub mod identity;
 pub mod pairwise;
 pub mod qr;
-pub mod threshold;
 pub mod rotation;
+pub mod threshold;
 
 // Re-export main types
-pub use identity::{Identity, IdentityKeys, PublicIdentity, IdentityError};
+pub use identity::RotationPolicy;
+pub use identity::{Identity, IdentityError, IdentityKeys, PublicIdentity};
 pub use pairwise::PairwiseIdentity;
 pub use qr::{QrCode, QrError};
-pub use threshold::{SecretShare, ThresholdConfig, ShareError};
-pub use identity::RotationPolicy;
 pub use rotation::RotationScheduler;
+pub use threshold::{SecretShare, ShareError, ThresholdConfig};

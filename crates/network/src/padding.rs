@@ -3,7 +3,7 @@
 //! To defeat traffic analysis based on message sizes, all messages
 //! are padded to fixed sizes. This module provides padding utilities.
 
-use rand::{RngCore, Rng, rngs::OsRng};
+use rand::{rngs::OsRng, Rng, RngCore};
 use thiserror::Error;
 
 /// Padding configuration
@@ -28,11 +28,11 @@ pub struct PaddingConfig {
 impl Default for PaddingConfig {
     fn default() -> Self {
         Self {
-            min_size: 256,           // Minimum 256 bytes
-            granularity: 64,         // Pad to 64-byte boundary
-            max_size: 65536,         // Max 64KB
-            random_padding: true,    // Add random padding
-            random_range: 1024,      // 0-1KB extra random padding
+            min_size: 256,        // Minimum 256 bytes
+            granularity: 64,      // Pad to 64-byte boundary
+            max_size: 65536,      // Max 64KB
+            random_padding: true, // Add random padding
+            random_range: 1024,   // 0-1KB extra random padding
         }
     }
 }
@@ -87,7 +87,8 @@ impl PaddedMessage {
 
         // Round up to granularity
         if config.granularity > 0 {
-            target_size = ((target_size + config.granularity - 1) / config.granularity) * config.granularity;
+            target_size =
+                ((target_size + config.granularity - 1) / config.granularity) * config.granularity;
         }
 
         // Add random padding if enabled
@@ -97,7 +98,8 @@ impl PaddedMessage {
 
             // Round to granularity again
             if config.granularity > 0 {
-                target_size = ((target_size + config.granularity - 1) / config.granularity) * config.granularity;
+                target_size = ((target_size + config.granularity - 1) / config.granularity)
+                    * config.granularity;
             }
         }
 
@@ -133,7 +135,7 @@ impl PaddedMessage {
     pub fn deserialize(data: &[u8], payload_len: usize) -> Result<Self, PaddingError> {
         if data.len() < payload_len {
             return Err(PaddingError::InvalidConfig(
-                "Data shorter than payload length".into()
+                "Data shorter than payload length".into(),
             ));
         }
 

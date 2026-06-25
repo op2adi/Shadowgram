@@ -8,7 +8,11 @@
 //! - Multi-device synchronization
 //! - Network message processing
 
-use std::sync::Arc;
+use crate::{
+    Chat, ChatSession, Contact, ContactDiscoveryPSI, ContactStore, DeviceInfo, DeviceSync,
+    GroupInfo, GroupMember, GroupState, MemberRole, MemoryContactStore, Message, MessageEnvelope,
+    MessageStatus, MessageType as MsgType, PsiProtocol, PsiResult, SyncOperation,
+};
 use parking_lot::RwLock;
 use shadowgram_crypto::{
     key_exchange::{HybridKeypair, KeyExchangeMessage},
@@ -16,19 +20,10 @@ use shadowgram_crypto::{
 };
 use shadowgram_identity::{Identity, PublicIdentity, RotationPolicy};
 use shadowgram_network::{
-    NetworkEnvelope, MessageType, NoiseIK,
-    tor::TorTransport,
-    mixnet::MixnetClient,
-    dht::DhtNode,
+    dht::DhtNode, mixnet::MixnetClient, tor::TorTransport, MessageType, NetworkEnvelope, NoiseIK,
 };
 use shadowgram_storage::{Database, EncryptedCache};
-use crate::{
-    Message, MessageEnvelope, MessageStatus, MessageType as MsgType,
-    Chat, ChatSession, Contact, ContactStore, MemoryContactStore,
-    GroupState, GroupInfo, GroupMember, MemberRole,
-    DeviceInfo, DeviceSync, SyncOperation,
-    PsiProtocol, ContactDiscoveryPSI, PsiResult,
-};
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Client configuration
@@ -234,23 +229,27 @@ impl Client {
 
     /// Get identity fingerprint
     pub fn fingerprint(&self) -> Option<String> {
-        self.identity.read()
+        self.identity
+            .read()
             .as_ref()
             .map(|i| i.public().display_fingerprint().to_string())
     }
 
     /// Create new identity
     pub fn create_identity(&self) -> Result<Arc<Identity>, ClientError> {
-        let identity = Identity::generate()
-            .map_err(|e| ClientError::IdentityError(e.to_string()))?;
+        let identity =
+            Identity::generate().map_err(|e| ClientError::IdentityError(e.to_string()))?;
 
         // Store in database if available
         if let Some(db) = self.database.read().as_ref() {
             db.store_identity(
                 identity.public().display_fingerprint(),
                 &identity.public().to_bytes().unwrap_or_default(),
-                &identity.serialize_encrypted(self.config.db_key.as_ref().unwrap_or(&[0u8; 32])).unwrap_or_default()
-            ).map_err(|e| ClientError::StorageError(e.to_string()))?;
+                &identity
+                    .serialize_encrypted(self.config.db_key.as_ref().unwrap_or(&[0u8; 32]))
+                    .unwrap_or_default(),
+            )
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
         }
 
         let identity = Arc::new(identity);
@@ -258,7 +257,9 @@ impl Client {
 
         // Schedule sync to other devices
         let mut sync = self.device_sync.write();
-        sync.queue_operation(SyncOperation::IdentityUpdate { new_fingerprint: identity.public().display_fingerprint().to_string() });
+        sync.queue_operation(SyncOperation::IdentityUpdate {
+            new_fingerprint: identity.public().display_fingerprint().to_string(),
+        });
 
         Ok(identity)
     }
@@ -275,7 +276,9 @@ impl Client {
             }
         }
 
-        Err(ClientError::IdentityError("Identity not found in storage".into()))
+        Err(ClientError::IdentityError(
+            "Identity not found in storage".into(),
+        ))
     }
 
     /// Start the client
@@ -291,9 +294,10 @@ impl Client {
             encryption_key: self.config.db_key.unwrap_or([0u8; 32]),
             ..Default::default()
         };
-        let mut db = Database::new(db_config)
+        let mut db =
+            Database::new(db_config).map_err(|e| ClientError::StorageError(e.to_string()))?;
+        db.open()
             .map_err(|e| ClientError::StorageError(e.to_string()))?;
-        db.open().map_err(|e| ClientError::StorageError(e.to_string()))?;
         *self.database.write() = Some(db);
 
         // TODO: Load primary identity if fingerprint known
@@ -362,7 +366,10 @@ impl Client {
         let keypair = HybridKeypair::generate_initiator();
 
         // Serialize key exchange message
-        let exchange_msg = KeyExchangeMessage::from_initiator(keypair.x25519_public(), keypair.mlkem_encapsulation_key());
+        let exchange_msg = KeyExchangeMessage::from_initiator(
+            keypair.x25519_public(),
+            keypair.mlkem_encapsulation_key(),
+        );
 
         let payload = serde_json::to_vec(&exchange_msg)
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
@@ -392,8 +399,7 @@ impl Client {
 
     /// Check if session is established with contact
     pub async fn is_session_established(&self, fingerprint: &str) -> bool {
-        self.sessions.sessions.read()
-            .contains_key(fingerprint)
+        self.sessions.sessions.read().contains_key(fingerprint)
     }
 
     /// Send 1-on-1 message
@@ -403,12 +409,20 @@ impl Client {
         message: Message,
     ) -> Result<NetworkEnvelope, ClientError> {
         // Get or create chat session
-        if !self.sessions.sessions.read().contains_key(contact_fingerprint) {
-            return Err(ClientError::SessionNotFound(contact_fingerprint.to_string()));
+        if !self
+            .sessions
+            .sessions
+            .read()
+            .contains_key(contact_fingerprint)
+        {
+            return Err(ClientError::SessionNotFound(
+                contact_fingerprint.to_string(),
+            ));
         }
 
         // Serialize message
-        let payload = message.serialize()
+        let payload = message
+            .serialize()
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
 
         // Create encrypted envelope
@@ -448,10 +462,7 @@ impl Client {
     }
 
     /// Get pending messages for a contact
-    pub async fn get_pending_messages(
-        &self,
-        contact_fingerprint: &str,
-    ) -> Vec<Message> {
+    pub async fn get_pending_messages(&self, contact_fingerprint: &str) -> Vec<Message> {
         // In production: decrypt and return messages from storage
         vec![]
     }
@@ -488,12 +499,15 @@ impl Client {
             left_at: None,
         };
 
-        let mut group = GroupState::create(group_info, creator.public().display_fingerprint().to_string(), vec![]);
+        let mut group = GroupState::create(
+            group_info,
+            creator.public().display_fingerprint().to_string(),
+            vec![],
+        );
         let _ = group.add_member(member);
 
         // Store group
-        self.sessions.groups.write()
-            .insert(group_id.clone(), group);
+        self.sessions.groups.write().insert(group_id.clone(), group);
 
         Ok(group_id)
     }
@@ -525,7 +539,8 @@ impl Client {
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
 
         // Encrypt for group (in production: MLS encryption)
-        let payload = message.serialize()
+        let payload = message
+            .serialize()
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
 
         let envelope = NetworkEnvelope::new(MessageType::Message, payload);
@@ -538,10 +553,7 @@ impl Client {
     }
 
     /// Process group commit
-    pub async fn process_group_commit(
-        &self,
-        commit: Vec<u8>,
-    ) -> Result<(), ClientError> {
+    pub async fn process_group_commit(&self, commit: Vec<u8>) -> Result<(), ClientError> {
         // In production: apply commit to group state
         Ok(())
     }
@@ -550,16 +562,15 @@ impl Client {
 
     /// Add contact
     pub fn add_contact(&self, contact: Contact) -> Result<(), ClientError> {
-        self.contacts.read()
+        self.contacts
+            .read()
             .add(contact)
             .map_err(|e| ClientError::StorageError(e.to_string()))
     }
 
     /// Get contact by fingerprint
     pub fn get_contact(&self, fingerprint: &str) -> Option<Contact> {
-        self.contacts.read()
-            .get(fingerprint)
-            .unwrap_or(None)
+        self.contacts.read().get(fingerprint).unwrap_or(None)
     }
 
     /// List all contacts
@@ -569,21 +580,16 @@ impl Client {
 
     /// Remove contact
     pub fn remove_contact(&self, fingerprint: &str) -> Result<(), ClientError> {
-        self.contacts.read()
+        self.contacts
+            .read()
             .remove(fingerprint)
             .map_err(|e| ClientError::StorageError(e.to_string()))
     }
 
     /// Run PSI contact discovery
-    pub fn run_contact_discovery_psi(
-        &self,
-        remote_hashes: &[Vec<u8>],
-    ) -> PsiResult {
+    pub fn run_contact_discovery_psi(&self, remote_hashes: &[Vec<u8>]) -> PsiResult {
         let contacts = self.list_contacts();
-        let fingerprints: Vec<String> = contacts
-            .iter()
-            .map(|c| c.fingerprint.clone())
-            .collect();
+        let fingerprints: Vec<String> = contacts.iter().map(|c| c.fingerprint.clone()).collect();
 
         let discovery = ContactDiscoveryPSI::new(fingerprints);
         discovery.discover_common(remote_hashes)
@@ -657,18 +663,17 @@ mod tests {
         let identity = client.create_identity().unwrap();
 
         assert!(!identity.public().display_fingerprint().is_empty());
-        assert_eq!(client.fingerprint(), Some(identity.public().display_fingerprint().to_string()));
+        assert_eq!(
+            client.fingerprint(),
+            Some(identity.public().display_fingerprint().to_string())
+        );
     }
 
     #[test]
     fn test_contact_management() {
         let client = Client::with_defaults().unwrap();
 
-        let contact = Contact::new(
-            "test_fp".to_string(),
-            "Test User".to_string(),
-            vec![],
-        );
+        let contact = Contact::new("test_fp".to_string(), "Test User".to_string(), vec![]);
 
         client.add_contact(contact.clone()).unwrap();
 

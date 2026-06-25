@@ -4,11 +4,11 @@
 //! Pairwise pseudonyms are derived from both parties' identities
 //! using HKDF, ensuring no correlation across contacts.
 
-use x25519_dalek::{StaticSecret, PublicKey as X25519PublicKey};
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use shadowgram_crypto::kdf::KeyDerivation;
 use crate::identity::{Identity, PublicIdentity};
-use serde::{Serialize, Deserialize};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use serde::{Deserialize, Serialize};
+use shadowgram_crypto::kdf::KeyDerivation;
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 /// Pairwise identity derived for a specific contact
 pub struct PairwiseIdentity {
@@ -32,10 +32,8 @@ impl PairwiseIdentity {
         let their_fp = their_public.fingerprint_full.as_bytes();
 
         // HKDF-expand to get seed material
-        let seed = KeyDerivation::blake3_derive(
-            &[our_fp, their_fp].concat(),
-            b"shadowgram-pairwise-seed",
-        );
+        let seed =
+            KeyDerivation::blake3_derive(&[our_fp, their_fp].concat(), b"shadowgram-pairwise-seed");
 
         // Derive X25519 keypair from seed
         let x25519_secret = StaticSecret::from(seed);
@@ -54,7 +52,11 @@ impl PairwiseIdentity {
             x25519_public,
             _ed25519_secret: ed25519_secret,
             ed25519_public,
-            contact_fingerprint: their_public.fingerprint_full.as_bytes().try_into().unwrap_or([0u8; 32]),
+            contact_fingerprint: their_public
+                .fingerprint_full
+                .as_bytes()
+                .try_into()
+                .unwrap_or([0u8; 32]),
         }
     }
 

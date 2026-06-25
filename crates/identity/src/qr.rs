@@ -7,9 +7,9 @@
 //!
 //! QR codes contain the full public identity plus optional metadata.
 
-use qrcode::{QrCode as QrImage, Color, EcLevel};
-use image::{ImageBuffer, Rgb};
 use crate::identity::PublicIdentity;
+use image::{ImageBuffer, Rgb};
+use qrcode::{Color, EcLevel, QrCode as QrImage};
 use thiserror::Error;
 
 /// QR code error types
@@ -41,7 +41,8 @@ impl QrCode {
     /// Create QR code from public identity
     pub fn from_identity(identity: &PublicIdentity) -> Result<Self, QrError> {
         // Serialize identity to bytes
-        let data = identity.to_bytes()
+        let data = identity
+            .to_bytes()
             .map_err(|e| QrError::EncodingFailed(e.to_string()))?;
 
         // Add magic bytes for Shadowgram QR identification
@@ -53,7 +54,8 @@ impl QrCode {
         let image = QrImage::with_error_correction_level(
             &qr_data,
             EcLevel::L, // Low error correction (up to 7% damage) - needed for large ML-KEM keys
-        ).map_err(|e| QrError::EncodingFailed(e.to_string()))?;
+        )
+        .map_err(|e| QrError::EncodingFailed(e.to_string()))?;
 
         Ok(Self {
             image,
@@ -75,12 +77,17 @@ impl QrCode {
 
         // Placeholder - real implementation needs qr detection library
         Err(QrError::DecodingFailed(
-            "QR decoding not implemented - needs zbar/quirc binding".into()
+            "QR decoding not implemented - needs zbar/quirc binding".into(),
         ))
     }
 
     /// Render QR code as RGB image
-    pub fn render(&self, dark: [u8; 3], light: [u8; 3], scale: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+    pub fn render(
+        &self,
+        dark: [u8; 3],
+        light: [u8; 3],
+        scale: u32,
+    ) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
         let size = self.image.width() as u32;
         let scaled_size = size * scale;
 
@@ -123,7 +130,7 @@ impl QrCode {
         // Check magic bytes
         if qr_data.len() < 5 || &qr_data[0..5] != b"SGRAM" {
             return Err(QrError::InvalidData(
-                "Invalid QR format - missing Shadowgram magic bytes".into()
+                "Invalid QR format - missing Shadowgram magic bytes".into(),
             ));
         }
 
@@ -162,9 +169,12 @@ impl InvitationQr {
 
         // Create extended data with invitation info
         let mut invite_data = Vec::new();
-        invite_data.extend_from_slice(identity.to_bytes()
-            .map_err(|e| QrError::EncodingFailed(e.to_string()))?
-            .as_slice());
+        invite_data.extend_from_slice(
+            identity
+                .to_bytes()
+                .map_err(|e| QrError::EncodingFailed(e.to_string()))?
+                .as_slice(),
+        );
         invite_data.extend_from_slice(invite_code.as_bytes());
         invite_data.extend_from_slice(&expires_at.to_le_bytes());
 
@@ -227,7 +237,10 @@ mod tests {
 
         let extracted = QrCode::extract_identity(qr.data()).unwrap();
 
-        assert_eq!(extracted.fingerprint_full, identity.public().fingerprint_full);
+        assert_eq!(
+            extracted.fingerprint_full,
+            identity.public().fingerprint_full
+        );
     }
 
     #[test]

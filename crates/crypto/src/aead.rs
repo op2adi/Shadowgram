@@ -3,13 +3,10 @@
 //! Provides authenticated encryption with associated data (AEAD)
 //! for message encryption after key derivation.
 
-use chacha20poly1305::{
-    ChaCha20Poly1305, Key as ChachaKey, Nonce as ChachaNonce,
-    KeyInit,
-};
 use aes_gcm::Aes256Gcm;
-use zeroize::Zeroize;
+use chacha20poly1305::{ChaCha20Poly1305, Key as ChachaKey, KeyInit, Nonce as ChachaNonce};
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use chacha20poly1305::aead::{Aead, Payload};
 
@@ -103,7 +100,7 @@ impl AeadCipher {
         // Encrypt with payload struct
         let payload = Payload {
             msg: plaintext,
-            aad: &[]
+            aad: &[],
         };
         let mut ciphertext = cipher
             .encrypt(chacha_nonce, payload)
@@ -166,7 +163,7 @@ impl AeadCipher {
 
         let payload = Payload {
             msg: plaintext,
-            aad: &[]
+            aad: &[],
         };
         let nonce_array = GenericArray::clone_from_slice(nonce);
         let mut ciphertext = cipher
@@ -245,7 +242,7 @@ impl AeadCipher {
 
     /// Generate random nonce
     pub fn generate_nonce() -> [u8; 12] {
-        use rand::{RngCore, rngs::OsRng};
+        use rand::{rngs::OsRng, RngCore};
         let mut nonce = [0u8; 12];
         OsRng.fill_bytes(&mut nonce);
         nonce
@@ -276,7 +273,8 @@ mod tests {
         let plaintext = b"Hello, Shadowgram!";
         let aad = b"associated data";
 
-        let (mut ciphertext, tag) = AeadCipher::encrypt_chacha20(&key, &nonce, plaintext, aad).unwrap();
+        let (mut ciphertext, tag) =
+            AeadCipher::encrypt_chacha20(&key, &nonce, plaintext, aad).unwrap();
 
         // Tamper with ciphertext
         ciphertext[0] ^= 0xff;
@@ -292,8 +290,10 @@ mod tests {
         let plaintext = b"Hello, Shadowgram!";
         let aad = b"associated data";
 
-        let (ciphertext, tag) = AeadCipher::encrypt_aes256gcm(&key, &nonce, plaintext, aad).unwrap();
-        let decrypted = AeadCipher::decrypt_aes256gcm(&key, &nonce, &ciphertext, &tag, aad).unwrap();
+        let (ciphertext, tag) =
+            AeadCipher::encrypt_aes256gcm(&key, &nonce, plaintext, aad).unwrap();
+        let decrypted =
+            AeadCipher::decrypt_aes256gcm(&key, &nonce, &ciphertext, &tag, aad).unwrap();
 
         assert_eq!(plaintext, &decrypted[..]);
     }

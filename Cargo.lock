@@ -6330,9 +6330,14 @@ dependencies = [
 name = "shadowgram-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "hex",
  "parking_lot",
+ "rand 0.8.6",
  "serde",
  "serde_json",
+ "sha2",
  "shadowgram-crypto",
  "shadowgram-identity",
  "shadowgram-messenger",

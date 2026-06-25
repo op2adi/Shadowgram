@@ -7,23 +7,23 @@
 //! - Constant-size packet padding
 //! - Cover traffic generation
 
-pub mod tor;
-pub mod mixnet;
-pub mod dht;
-pub mod padding;
 pub mod cover_traffic;
-pub mod relay;
-pub mod transports;
+pub mod dht;
+pub mod mixnet;
 pub mod noise;
+pub mod padding;
+pub mod relay;
+pub mod tor;
+pub mod transports;
 
 // Re-exports
-pub use tor::{TorTransport, TorError, OnionAddress};
-pub use mixnet::{MixnetClient, MixnetConfig};
-pub use dht::{DhtNode, DhtConfig, PeerDiscovery};
-pub use padding::{PaddedMessage, PaddingConfig};
 pub use cover_traffic::{CoverTraffic, TrafficConfig};
-pub use relay::{RelayPool, MultiPathRouting};
-pub use noise::{NoiseIK, NoiseBuilder, HandshakeMessageA, HandshakeMessageB, NoiseError};
+pub use dht::{DhtConfig, DhtNode, PeerDiscovery};
+pub use mixnet::{MixnetClient, MixnetConfig};
+pub use noise::{HandshakeMessageA, HandshakeMessageB, NoiseBuilder, NoiseError, NoiseIK};
+pub use padding::{PaddedMessage, PaddingConfig};
+pub use relay::{MultiPathRouting, RelayPool};
+pub use tor::{OnionAddress, TorError, TorTransport};
 
 /// Network message types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,13 +120,17 @@ impl NetworkEnvelope {
         };
 
         if data.len() < 9 {
-            return Err(NetworkError::InvalidFormat("Too short for length header".into()));
+            return Err(NetworkError::InvalidFormat(
+                "Too short for length header".into(),
+            ));
         }
 
         let payload_len = usize::from_le_bytes(data[1..9].try_into().unwrap());
 
         if data.len() < 9 + payload_len {
-            return Err(NetworkError::InvalidFormat("Payload length mismatch".into()));
+            return Err(NetworkError::InvalidFormat(
+                "Payload length mismatch".into(),
+            ));
         }
 
         let payload = data[9..9 + payload_len].to_vec();

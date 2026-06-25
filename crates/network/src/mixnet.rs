@@ -10,12 +10,12 @@
 //! - Reordering buffer
 //! - Multi-hop routing
 
-use rand::{Rng, distributions::Distribution};
 use rand::rngs::OsRng;
+use rand::{distributions::Distribution, Rng};
 use std::collections::VecDeque;
 use std::time::Duration;
-use tokio::time::sleep;
 use thiserror::Error;
+use tokio::time::sleep;
 
 /// Mixnet configuration
 #[derive(Clone)]
@@ -112,7 +112,7 @@ impl MixnetClient {
 
         if path.len() < self.config.hop_count {
             return Err(MixnetError::RoutingFailed(
-                "Could not build complete path".into()
+                "Could not build complete path".into(),
             ));
         }
 
@@ -313,11 +313,7 @@ mod tests {
 
     #[test]
     fn test_mix_node_creation() {
-        let node = MixNode::new(
-            "node1".into(),
-            "xyz.onion:8080".into(),
-            vec![1, 2, 3],
-        );
+        let node = MixNode::new("node1".into(), "xyz.onion:8080".into(), vec![1, 2, 3]);
         assert_eq!(node.id, "node1");
         assert_eq!(node.load_factor, 0.0);
     }

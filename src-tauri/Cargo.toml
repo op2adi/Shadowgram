@@ -20,6 +20,11 @@ serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 thiserror = "1.0"
 parking_lot = "0.12"
+base64 = "0.22"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
 
 # Shadowgram crates
 shadowgram-crypto = { path = "../crates/crypto" }

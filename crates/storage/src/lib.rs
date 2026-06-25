@@ -10,16 +10,13 @@
 //! a master key that can be backed up separately.
 
 pub mod database;
-pub mod schema;
 pub mod encrypted_cache;
+pub mod schema;
 
 // Re-exports
-pub use database::{
-    Database, DbConfig, DbError,
-    IdentityRow, ContactRow, MessageRow, DbStats,
-};
-pub use schema::{tables, columns, SCHEMA_VERSION};
-pub use encrypted_cache::{EncryptedCache, CacheEntry};
+pub use database::{ContactRow, Database, DbConfig, DbError, DbStats, IdentityRow, MessageRow};
+pub use encrypted_cache::{CacheEntry, EncryptedCache};
+pub use schema::{columns, tables, SCHEMA_VERSION};
 
 /// Storage library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

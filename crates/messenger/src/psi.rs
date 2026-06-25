@@ -149,10 +149,7 @@ impl ContactDiscoveryPSI {
     }
 
     /// Run PSI protocol with remote contacts
-    pub fn discover_common(
-        &self,
-        remote_contact_hashes: &[Vec<u8>],
-    ) -> PsiResult {
+    pub fn discover_common(&self, remote_contact_hashes: &[Vec<u8>]) -> PsiResult {
         if remote_contact_hashes.is_empty() {
             return PsiResult {
                 matched_fingerprints: Vec::new(),
@@ -190,7 +187,8 @@ impl ContactDiscoveryPSI {
 
     /// Add contact
     pub fn add_contact(&mut self, fingerprint: String) {
-        self.local_contacts.push(ContactFingerprint::new(fingerprint));
+        self.local_contacts
+            .push(ContactFingerprint::new(fingerprint));
     }
 
     /// Remove contact
@@ -211,10 +209,7 @@ mod tests {
             b"charlie@example.com".to_vec(),
         ];
 
-        let their_items = vec![
-            b"bob@example.com".to_vec(),
-            b"dave@example.com".to_vec(),
-        ];
+        let their_items = vec![b"bob@example.com".to_vec(), b"dave@example.com".to_vec()];
 
         let mut our_psi = PsiProtocol::new(our_items.clone());
         let their_psi = PsiProtocol::new(their_items.clone());
@@ -235,7 +230,7 @@ mod tests {
         ]);
 
         let remote_hashes = vec![
-            vec![1u8; 32], // Not matching
+            vec![1u8; 32],                             // Not matching
             discovery.local_contacts[1].hash.to_vec(), // Matches fp2
         ];
 

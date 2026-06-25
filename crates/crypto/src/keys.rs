@@ -4,8 +4,8 @@
 //! memory scraping attacks. This module provides the traits
 //! and implementations for secure key handling.
 
-use zeroize::{Zeroize, ZeroizeOnDrop as ZeroizeTrait};
 use subtle::ConstantTimeEq;
+use zeroize::{Zeroize, ZeroizeOnDrop as ZeroizeTrait};
 
 /// Marker trait for types that must be zeroized
 pub trait ZeroizeOnDrop: ZeroizeTrait {}

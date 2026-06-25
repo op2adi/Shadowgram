@@ -7,15 +7,15 @@
 //!
 //! Identities are generated locally and never tied to real-world identifiers.
 
-use x25519_dalek::{StaticSecret as X25519Secret, PublicKey as X25519PublicKey};
-use ed25519_dalek::{SigningKey as Ed25519Secret, VerifyingKey as Ed25519PublicKey, Signature};
-use ml_kem::{MlKem768, DecapsulationKey, EncapsulationKey, KeyExport};
-use ed25519_dalek::Verifier;
-use serde::{Serialize, Deserialize};
 use base64::prelude::*;
-use zeroize::{Zeroize, ZeroizeOnDrop};
-use thiserror::Error;
 use blake3::Hasher as Blake3Hasher;
+use ed25519_dalek::Verifier;
+use ed25519_dalek::{Signature, SigningKey as Ed25519Secret, VerifyingKey as Ed25519PublicKey};
+use ml_kem::{DecapsulationKey, EncapsulationKey, KeyExport, MlKem768};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519Secret};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Identity generation errors
 #[derive(Error, Debug)]
@@ -140,7 +140,8 @@ impl PublicIdentity {
         let fingerprint = hasher.finalize();
 
         let fingerprint_full = hex::encode(fingerprint.as_bytes());
-        let fingerprint_short = BASE64_STANDARD.encode(&fingerprint.as_bytes()[..6])
+        let fingerprint_short = BASE64_STANDARD
+            .encode(&fingerprint.as_bytes()[..6])
             .chars()
             .take(8)
             .collect();
@@ -166,22 +167,29 @@ impl PublicIdentity {
 
     /// Verify the self-signature
     pub fn verify_self_signature(&self) -> Result<bool, IdentityError> {
-        let x25519_bytes = BASE64_STANDARD.decode(&self.x25519_public)
+        let x25519_bytes = BASE64_STANDARD
+            .decode(&self.x25519_public)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
-        let ed25519_bytes = BASE64_STANDARD.decode(&self.ed25519_public)
+        let ed25519_bytes = BASE64_STANDARD
+            .decode(&self.ed25519_public)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
-        let mlkem_bytes = BASE64_STANDARD.decode(&self.mlkem_public)
+        let mlkem_bytes = BASE64_STANDARD
+            .decode(&self.mlkem_public)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
 
-        let signature_bytes = BASE64_STANDARD.decode(&self.self_signature)
+        let signature_bytes = BASE64_STANDARD
+            .decode(&self.self_signature)
             .map_err(|e| IdentityError::InvalidFormat(e.to_string()))?;
         let signature = Signature::from_slice(&signature_bytes)
             .map_err(|_| IdentityError::InvalidFormat("Invalid signature length".into()))?;
 
         let ed25519_public = Ed25519PublicKey::from_bytes(
-            &ed25519_bytes.clone().try_into()
-                .map_err(|_| IdentityError::InvalidFormat("Wrong Ed25519 key length".into()))?
-        ).map_err(|_| IdentityError::InvalidFormat("Invalid Ed25519 public key".into()))?;
+            &ed25519_bytes
+                .clone()
+                .try_into()
+                .map_err(|_| IdentityError::InvalidFormat("Wrong Ed25519 key length".into()))?,
+        )
+        .map_err(|_| IdentityError::InvalidFormat("Invalid Ed25519 public key".into()))?;
 
         let mut signable = Vec::new();
         signable.extend_from_slice(&x25519_bytes);
@@ -202,14 +210,12 @@ impl PublicIdentity {
 
     /// Parse public identity from serialized form
     pub fn from_serialized(data: &[u8]) -> Result<Self, IdentityError> {
-        bincode::deserialize(data)
-            .map_err(|e| IdentityError::SerializationError(e.to_string()))
+        bincode::deserialize(data).map_err(|e| IdentityError::SerializationError(e.to_string()))
     }
 
     /// Serialize to bytes
     pub fn to_bytes(&self) -> Result<Vec<u8>, IdentityError> {
-        bincode::serialize(self)
-            .map_err(|e| IdentityError::SerializationError(e.to_string()))
+        bincode::serialize(self).map_err(|e| IdentityError::SerializationError(e.to_string()))
     }
 }
 
@@ -283,11 +289,16 @@ impl Identity {
     }
 
     /// Serialize identity for secure storage
-    pub fn serialize_encrypted(&self, _encryption_key: &[u8; 32]) -> Result<Vec<u8>, IdentityError> {
+    pub fn serialize_encrypted(
+        &self,
+        _encryption_key: &[u8; 32],
+    ) -> Result<Vec<u8>, IdentityError> {
         // Serialize keys (would be encrypted in production)
         let mut data = Vec::new();
-        data.extend(bincode::serialize(&self.public)
-            .map_err(|e| IdentityError::SerializationError(e.to_string()))?);
+        data.extend(
+            bincode::serialize(&self.public)
+                .map_err(|e| IdentityError::SerializationError(e.to_string()))?,
+        );
         // In production: encrypt private keys before storage
         Ok(data)
     }
@@ -333,7 +344,10 @@ impl RotationPolicy {
 
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 #[cfg(test)]

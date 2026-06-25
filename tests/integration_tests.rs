@@ -5,14 +5,12 @@
 
 use shadowgram_crypto::key_exchange::HybridKeypair;
 use shadowgram_identity::Identity;
-use shadowgram_network::{NetworkEnvelope, MessageType};
-use shadowgram_messenger::{
-    Message, ChatSession, Contact, MemoryContactStore,
-    GroupState, GroupInfo, GroupMember, MemberRole,
-    DeviceInfo, DeviceSync, SyncOperation,
-    ContactDiscoveryPSI, PsiResult,
-};
 use shadowgram_messenger::client::{Client, ClientConfig, ClientState};
+use shadowgram_messenger::{
+    ChatSession, Contact, ContactDiscoveryPSI, DeviceInfo, DeviceSync, GroupInfo, GroupMember,
+    GroupState, MemberRole, MemoryContactStore, Message, PsiResult, SyncOperation,
+};
+use shadowgram_network::{MessageType, NetworkEnvelope};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -45,10 +43,9 @@ mod integration_tests {
         let identity = client.create_identity().unwrap();
 
         // Initiate key exchange
-        let result = client.initiate_key_exchange(
-            &identity,
-            "remote_fingerprint",
-        ).await;
+        let result = client
+            .initiate_key_exchange(&identity, "remote_fingerprint")
+            .await;
 
         assert!(result.is_ok());
         let envelope = result.unwrap();
@@ -157,14 +154,17 @@ mod integration_tests {
 
         // Should find Charlie as common contact
         assert_eq!(alice_result.total_matched, 1);
-        assert!(alice_result.matched_fingerprints.iter().any(|f| f.contains("charlie")));
+        assert!(alice_result
+            .matched_fingerprints
+            .iter()
+            .any(|f| f.contains("charlie")));
     }
 
     #[tokio::test]
     async fn test_noise_protocol_handshake() {
-        use shadowgram_network::noise::NoiseIK;
-        use x25519_dalek::{StaticSecret, PublicKey};
         use rand::rngs::OsRng;
+        use shadowgram_network::noise::NoiseIK;
+        use x25519_dalek::{PublicKey, StaticSecret};
 
         // Generate static keys
         let alice_static = StaticSecret::random_from_rng(OsRng);
@@ -180,7 +180,9 @@ mod integration_tests {
         // Bob responds - clone bob_static since new_responder takes ownership
         let bob_static_clone = StaticSecret::random_from_rng(OsRng);
         let mut bob_ik = NoiseIK::new_responder(bob_static, &psk);
-        let msg_b = bob_ik.read_message_a_write_message_b(&msg_a, bob_static_clone).unwrap();
+        let msg_b = bob_ik
+            .read_message_a_write_message_b(&msg_a, bob_static_clone)
+            .unwrap();
 
         // Alice finalizes
         alice_ik.read_message_b(&msg_b).unwrap();
@@ -276,11 +278,7 @@ mod integration_tests {
     async fn test_contact_management() {
         let client = Client::with_defaults().unwrap();
 
-        let contact = Contact::new(
-            "test_fp".to_string(),
-            "Test User".to_string(),
-            vec![],
-        );
+        let contact = Contact::new("test_fp".to_string(), "Test User".to_string(), vec![]);
 
         client.add_contact(contact.clone()).unwrap();
 

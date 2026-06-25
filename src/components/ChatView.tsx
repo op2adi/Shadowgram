@@ -10,6 +10,8 @@ export interface ChatMessage {
   error?: string | null;
   destination_fingerprint: string;
   immutable: boolean;
+  delivered_at?: number | null;
+  retry_count: number;
 }
 
 interface ChatViewProps {
@@ -112,6 +114,9 @@ export default function ChatView({
                       <span className="text-muted text-sm">Destination: {message.destination_fingerprint}</span>
                     )}
                     {message.error && <p className="message-error">{message.error}</p>}
+                    {message.retry_count > 0 && (
+                      <p className="text-muted text-sm">Retries: {message.retry_count}</p>
+                    )}
                   </div>
                 </div>
               ))

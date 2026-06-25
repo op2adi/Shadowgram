@@ -4,9 +4,9 @@
 //! All key derivation uses a fixed context string "shadowgram"
 //! to prevent cross-protocol attacks.
 
+use blake3::Hasher as Blake3Hasher;
 use hkdf::Hkdf;
 use sha2::Sha256;
-use blake3::Hasher as Blake3Hasher;
 
 /// Key derivation operations
 pub struct KeyDerivation;

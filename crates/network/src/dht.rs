@@ -15,8 +15,8 @@ use libp2p::{
     multiaddr::Multiaddr,
     PeerId,
 };
-use thiserror::Error;
 use std::collections::HashMap;
+use thiserror::Error;
 
 /// DHT errors
 #[derive(Error, Debug)]
@@ -59,8 +59,8 @@ pub struct DhtConfig {
 impl Default for DhtConfig {
     fn default() -> Self {
         Self {
-            alpha: 3,      // 3 parallel queries
-            k_bucket_size: 20,  // Standard Kademlia K
+            alpha: 3,              // 3 parallel queries
+            k_bucket_size: 20,     // Standard Kademlia K
             replication_factor: 3, // Replicate to 3 closest nodes
             provider_ttl: std::time::Duration::from_secs(3600),
             record_ttl: Some(std::time::Duration::from_secs(86400)), // 24 hours
@@ -122,10 +122,7 @@ impl DhtNode {
     }
 
     /// Lookup a peer by identity fingerprint
-    pub async fn lookup_peer(
-        &mut self,
-        fingerprint: &[u8],
-    ) -> Result<PeerInfo, DhtError> {
+    pub async fn lookup_peer(&mut self, fingerprint: &[u8]) -> Result<PeerInfo, DhtError> {
         // Convert fingerprint to record key
         let _key = RecordKey::new(&fingerprint.to_vec());
 
@@ -211,13 +208,15 @@ impl PeerInfo {
 
     /// Check if peer has onion address
     pub fn has_onion_address(&self) -> bool {
-        self.addresses.iter()
+        self.addresses
+            .iter()
             .any(|a| a.to_string().contains(".onion"))
     }
 
     /// Get first onion address if available
     pub fn onion_address(&self) -> Option<&Multiaddr> {
-        self.addresses.iter()
+        self.addresses
+            .iter()
             .find(|a| a.to_string().contains(".onion"))
     }
 }
@@ -332,7 +331,9 @@ mod tests {
         assert!(!info1.has_onion_address());
 
         // Onion address
-        let addr2: Multiaddr = "/onion/abcdefghijklmnopqrstuvwxyz234567:8080".parse().unwrap();
+        let addr2: Multiaddr = "/onion/abcdefghijklmnopqrstuvwxyz234567:8080"
+            .parse()
+            .unwrap();
         let info2 = PeerInfo::new(peer_id, vec![addr2]);
         assert!(info2.has_onion_address());
     }

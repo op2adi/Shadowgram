@@ -6,15 +6,15 @@
 //!
 //! The hybrid approach ensures security even if one algorithm is broken.
 
+use ml_kem::{Ciphertext, DecapsulationKey, EncapsulationKey, MlKem768, SharedKey};
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
-use ml_kem::{MlKem768, EncapsulationKey, DecapsulationKey, Ciphertext, SharedKey};
 
+use base64::prelude::*;
 use ml_kem::kem::{Decapsulate, KeyExport};
 use rand::rngs::OsRng;
-use serde::{Serialize, Deserialize};
-use base64::prelude::*;
-use zeroize::Zeroize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use crate::kdf::KeyDerivation;
 
@@ -48,7 +48,10 @@ impl EphemeralX25519 {
     pub fn generate() -> Self {
         let secret = EphemeralSecret::random_from_rng(OsRng);
         let public = X25519PublicKey::from(&secret);
-        Self { secret: Some(secret), public }
+        Self {
+            secret: Some(secret),
+            public,
+        }
     }
 
     pub fn public_key(&self) -> &X25519PublicKey {
@@ -57,7 +60,11 @@ impl EphemeralX25519 {
 
     /// Consume the secret for DH (single use)
     pub fn ecdh_consume(mut self, remote_public: &X25519PublicKey) -> [u8; 32] {
-        self.secret.take().unwrap().diffie_hellman(remote_public).to_bytes()
+        self.secret
+            .take()
+            .unwrap()
+            .diffie_hellman(remote_public)
+            .to_bytes()
     }
 }
 
@@ -107,7 +114,10 @@ impl MlKemKeypair {
     }
 
     /// Decapsulate a ciphertext to recover the shared key
-    pub fn decapsulate(&self, ciphertext: &Ciphertext<MlKem768>) -> Result<[u8; 32], KeyExchangeError> {
+    pub fn decapsulate(
+        &self,
+        ciphertext: &Ciphertext<MlKem768>,
+    ) -> Result<[u8; 32], KeyExchangeError> {
         let shared: SharedKey = self.decapsulation_key.decapsulate(ciphertext);
         Ok(shared.into())
     }
@@ -165,12 +175,16 @@ impl HybridKeypair {
         responder_mlkem_ciphertext: &Ciphertext<MlKem768>,
     ) -> Result<SharedSecret, KeyExchangeError> {
         // X25519 shared secret - take ownership to perform DH
-        let x25519_secret = self.x25519_secret.take()
+        let x25519_secret = self
+            .x25519_secret
+            .take()
             .ok_or(KeyExchangeError::DecapsulationFailed)?;
         let x25519_shared = x25519_secret.diffie_hellman(responder_x25519_public);
 
         // ML-KEM decapsulation
-        let mlkem_decapsulation_key = self.mlkem_decapsulation_key.take()
+        let mlkem_decapsulation_key = self
+            .mlkem_decapsulation_key
+            .take()
             .ok_or(KeyExchangeError::DecapsulationFailed)?;
 
         let mlkem_shared: [u8; 32] = mlkem_decapsulation_key
@@ -226,8 +240,8 @@ impl HybridResponder {
         // Encapsulate to initiator's ML-KEM public key
         let mut m = [0u8; 32];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut m);
-        let (mlkem_ciphertext, mlkem_shared) = initiator_mlkem_encapsulation_key
-            .encapsulate_deterministic(&m.into());
+        let (mlkem_ciphertext, mlkem_shared) =
+            initiator_mlkem_encapsulation_key.encapsulate_deterministic(&m.into());
 
         // Combine shared secrets
         let mut combined = [0u8; 64];
@@ -327,7 +341,8 @@ impl KeyExchangeMessage {
 
     /// Parse initiator's X25519 public key
     pub fn parse_initiator_x25519(&self) -> Result<X25519PublicKey, KeyExchangeError> {
-        let bytes: [u8; 32] = BASE64_STANDARD.decode(&self.x25519_public)
+        let bytes: [u8; 32] = BASE64_STANDARD
+            .decode(&self.x25519_public)
             .map_err(|e| KeyExchangeError::InvalidPublicKey(e.to_string()))?
             .try_into()
             .map_err(|_| KeyExchangeError::InvalidPublicKey("Wrong length".into()))?;
@@ -335,25 +350,32 @@ impl KeyExchangeMessage {
     }
 
     /// Parse initiator's ML-KEM encapsulation key
-    pub fn parse_initiator_mlkem_key(&self) -> Result<EncapsulationKey<MlKem768>, KeyExchangeError> {
-        let bytes = BASE64_STANDARD.decode(&self.mlkem_encapsulation_key)
+    pub fn parse_initiator_mlkem_key(
+        &self,
+    ) -> Result<EncapsulationKey<MlKem768>, KeyExchangeError> {
+        let bytes = BASE64_STANDARD
+            .decode(&self.mlkem_encapsulation_key)
             .map_err(|e| KeyExchangeError::InvalidPublicKey(e.to_string()))?;
         let bytes_array: [u8; 1184] = bytes
             .try_into()
             .map_err(|_| KeyExchangeError::InvalidPublicKey("Wrong ML-KEM key length".into()))?;
-        
+
         EncapsulationKey::<MlKem768>::new(&bytes_array.into())
             .map_err(|_| KeyExchangeError::InvalidPublicKey("Invalid ML-KEM key".into()))
     }
 
     /// Parse responder's ML-KEM ciphertext
     pub fn parse_responder_ciphertext(&self) -> Result<Ciphertext<MlKem768>, KeyExchangeError> {
-        let bytes = BASE64_STANDARD.decode(self.mlkem_ciphertext.as_ref()
-            .ok_or_else(|| KeyExchangeError::InvalidPublicKey("No ciphertext".into()))?)
+        let bytes = BASE64_STANDARD
+            .decode(
+                self.mlkem_ciphertext
+                    .as_ref()
+                    .ok_or_else(|| KeyExchangeError::InvalidPublicKey("No ciphertext".into()))?,
+            )
             .map_err(|e| KeyExchangeError::InvalidPublicKey(e.to_string()))?;
-        let bytes_array: [u8; 1088] = bytes
-            .try_into()
-            .map_err(|_| KeyExchangeError::InvalidPublicKey("Wrong ML-KEM ciphertext length".into()))?;
+        let bytes_array: [u8; 1088] = bytes.try_into().map_err(|_| {
+            KeyExchangeError::InvalidPublicKey("Wrong ML-KEM ciphertext length".into())
+        })?;
         // Convert raw bytes to Ciphertext using From trait
         let ct: ml_kem::Ciphertext<MlKem768> = bytes_array.into();
         Ok(ct)
@@ -381,7 +403,9 @@ mod tests {
             HybridResponder::new(&their_x25519_public, &their_mlkem_key).unwrap();
 
         // Initiator finishes
-        let shared_secret = initiator.initiator_finish(&responder_x25519_public, &ciphertext).unwrap();
+        let shared_secret = initiator
+            .initiator_finish(&responder_x25519_public, &ciphertext)
+            .unwrap();
         assert_eq!(shared_secret.as_bytes().len(), 64);
     }
 }

@@ -71,13 +71,11 @@ pub struct Migration {
 }
 
 /// All migrations in order
-pub const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        description: "Initial schema",
-        sql: include_str!("migrations/001_init.sql"),
-    },
-];
+pub const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    description: "Initial schema",
+    sql: include_str!("migrations/001_init.sql"),
+}];
 
 /// Get applied migrations from database
 pub fn get_applied_migrations(conn: &rusqlite::Connection) -> Result<Vec<u32>, rusqlite::Error> {

@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import Sidebar, { type ChatSummary, type ContactSummary } from './components/Sidebar';
+import Sidebar, { type ChatSummary, type ContactSummary, type DiagnosticSummary } from './components/Sidebar';
 import ChatView, { type ChatMessage } from './components/ChatView';
 import IdentitySetup from './components/IdentitySetup';
 import './App.css';
 
 interface IdentityResponse {
   fingerprint: string;
+  fingerprint_full: string;
   qr_data: string;
+  invite_payload: string;
   generation: number;
-  rotated_from: string[];
   created_at: number;
   updated_at: number;
 }
@@ -26,6 +27,7 @@ function App() {
   const [contacts, setContacts] = useState<ContactSummary[]>([]);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticSummary[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [clientRunning, setClientRunning] = useState(false);
@@ -45,19 +47,38 @@ function App() {
     void loadMessages(activeChatId);
   }, [activeChatId]);
 
+  useEffect(() => {
+    if (!clientRunning) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadContactsAndChats(activeChatId ?? undefined);
+      void loadDiagnostics();
+      if (activeChatId) {
+        void loadMessages(activeChatId);
+      }
+    }, 2500);
+
+    return () => window.clearInterval(interval);
+  }, [clientRunning, activeChatId]);
+
   async function bootstrap() {
     try {
-      const [storedIdentity, contactList, chatList, running] = await Promise.all([
+      const [storedIdentity, contactList, chatList, running, diagList] = await Promise.all([
         invoke<IdentityResponse | null>('get_identity'),
         invoke<ContactSummary[]>('get_contacts'),
         invoke<ChatSummary[]>('get_chats'),
         invoke<boolean>('start_client'),
+        invoke<DiagnosticSummary[]>('get_diagnostics'),
       ]);
 
       setIdentity(storedIdentity);
       setContacts(contactList);
       setChats(chatList);
       setClientRunning(running);
+      setDiagnostics(diagList);
+      setStatusMessage(storedIdentity ? `Loaded stable profile ${storedIdentity.fingerprint}` : 'Ready for first-run identity setup');
 
       if (chatList.length > 0) {
         setActiveChatId(chatList[0].id);
@@ -100,21 +121,36 @@ function App() {
     }
   }
 
+  async function loadDiagnostics() {
+    try {
+      const values = await invoke<DiagnosticSummary[]>('get_diagnostics');
+      setDiagnostics(values);
+    } catch {
+      // Keep existing diagnostics if refresh fails.
+    }
+  }
+
   async function handleIdentityCreated(createdIdentity: IdentityResponse) {
     setIdentity(createdIdentity);
     setStatusMessage(`Identity ready at ${createdIdentity.fingerprint}`);
     setErrorMessage(null);
     await loadContactsAndChats();
+    await loadDiagnostics();
   }
 
-  async function handleRotateIdentity() {
+  async function handleResetIdentity() {
     try {
-      const rotated = await invoke<IdentityResponse>('rotate_identity');
-      setIdentity(rotated);
-      setStatusMessage(`Your public fingerprint rotated to ${rotated.fingerprint}`);
+      await invoke<boolean>('reset_identity');
+      setIdentity(null);
+      setContacts([]);
+      setChats([]);
+      setMessages([]);
+      setActiveChatId(null);
+      setStatusMessage('Identity reset. A new install profile will be created on the next setup.');
       setErrorMessage(null);
+      await loadDiagnostics();
     } catch (error) {
-      setErrorMessage(renderError(error, 'Failed to rotate identity'));
+      setErrorMessage(renderError(error, 'Failed to reset identity'));
     }
   }
 
@@ -122,7 +158,8 @@ function App() {
     try {
       await invoke<ContactSummary>('add_contact', { alias, fingerprint });
       await loadContactsAndChats();
-      setStatusMessage(`Saved ${alias} at ${fingerprint}`);
+      await loadDiagnostics();
+      setStatusMessage(`Saved contact ${alias}`);
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(renderError(error, 'Failed to add contact'));
@@ -137,7 +174,8 @@ function App() {
         newFingerprint,
       });
       await loadContactsAndChats(activeChatId ?? undefined);
-      setStatusMessage(`Updated ${alias} to ${newFingerprint}`);
+      await loadDiagnostics();
+      setStatusMessage(`Updated ${alias}`);
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(renderError(error, 'Failed to update contact'));
@@ -161,6 +199,7 @@ function App() {
       const chat = await invoke<ChatSummary>('refresh_chat_destination', { chatId });
       await loadContactsAndChats(chat.id);
       await loadMessages(chat.id);
+      await loadDiagnostics();
       setStatusMessage(`Chat destination refreshed to ${chat.contact_fingerprint}`);
       setErrorMessage(null);
     } catch (error) {
@@ -180,12 +219,13 @@ function App() {
       });
 
       await loadMessages(activeChatId);
+      await loadDiagnostics();
 
       if (response.error) {
         setErrorMessage(response.error);
         setStatusMessage(null);
       } else {
-        setStatusMessage(`Message sealed for delivery at ${new Date(response.timestamp * 1000).toLocaleTimeString()}`);
+        setStatusMessage(`Message persisted for delivery at ${new Date(response.timestamp * 1000).toLocaleTimeString()}`);
         setErrorMessage(null);
       }
     } catch (error) {
@@ -225,12 +265,13 @@ function App() {
             identity={identity}
             chats={chats}
             contacts={contacts}
+            diagnostics={diagnostics}
             activeChatId={activeChatId}
             onAddContact={handleAddContact}
             onUpdateContact={handleUpdateContact}
             onOpenChat={setActiveChatId}
             onStartChat={handleStartChat}
-            onRotateIdentity={handleRotateIdentity}
+            onResetIdentity={handleResetIdentity}
           />
           <ChatView
             selectedChat={activeChat}
@@ -248,10 +289,10 @@ function App() {
       <footer className="status-bar">
         <span className={`status-indicator ${clientRunning ? 'online' : 'offline'}`}></span>
         <span className="status-text">
-          {clientRunning ? 'Shell running on desktop/mobile target' : 'Disconnected'}
+          {clientRunning ? 'Profile loaded and transport listening' : 'Transport offline'}
         </span>
         <span className="status-detail">
-          {identity ? `Fingerprint generation ${identity.generation}` : 'Identity pending'}
+          {identity ? `Stable fingerprint ${identity.fingerprint}` : 'Identity pending'}
         </span>
         <span className="version">v0.1.0-alpha</span>
       </footer>
