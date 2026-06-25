@@ -10,6 +10,7 @@ use tauri::{
     generate_context,
 };
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     println!("Starting Shadowgram v{}", env!("CARGO_PKG_VERSION"));
 
@@ -27,12 +28,15 @@ pub fn run() {
             commands::ping,
             commands::get_version,
             commands::create_identity,
+            commands::rotate_identity,
             commands::get_identity,
             commands::export_identity_qr,
             commands::scan_identity_qr,
             commands::add_contact,
+            commands::update_contact,
             commands::get_contacts,
             commands::create_chat,
+            commands::refresh_chat_destination,
             commands::get_chats,
             commands::send_message,
             commands::get_messages,

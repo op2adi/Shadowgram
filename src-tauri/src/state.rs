@@ -8,13 +8,21 @@ use std::sync::Arc;
 pub struct StoredIdentity {
     pub fingerprint: String,
     pub qr_data: String,
+    pub generation: u32,
+    pub rotated_from: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 #[derive(Clone)]
 pub struct StoredContact {
+    pub id: String,
     pub fingerprint: String,
     pub alias: String,
     pub trust_level: u8,
+    pub status: String,
+    pub previous_fingerprints: Vec<String>,
+    pub updated_at: u64,
 }
 
 #[derive(Clone)]
@@ -22,6 +30,7 @@ pub struct StoredChat {
     pub id: String,
     pub contact_fingerprint: String,
     pub created_at: u64,
+    pub immutable_history: bool,
 }
 
 #[derive(Clone)]
@@ -31,9 +40,12 @@ pub struct StoredMessage {
     pub direction: String,
     pub timestamp: u64,
     pub status: String,
+    pub error: Option<String>,
+    pub destination_fingerprint: String,
+    pub immutable: bool,
 }
 
-/// Shared application state for the desktop shell.
+/// Shared application state for the desktop and mobile shell.
 pub struct AppState {
     pub client_running: Arc<Mutex<bool>>,
     pub identity: Arc<Mutex<Option<StoredIdentity>>>,

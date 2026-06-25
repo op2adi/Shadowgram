@@ -4,6 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 interface IdentityResponse {
   fingerprint: string;
   qr_data: string;
+  generation: number;
+  rotated_from: string[];
+  created_at: number;
+  updated_at: number;
 }
 
 interface IdentitySetupProps {
@@ -35,7 +39,7 @@ export default function IdentitySetup({ onIdentityCreated }: IdentitySetupProps)
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
           <h1>Shadowgram</h1>
-          <p className="text-muted">Local-first privacy messenger shell</p>
+          <p className="text-muted">Local-first privacy messenger shell for desktop and Android</p>
         </div>
 
         {!identity ? (
@@ -73,6 +77,10 @@ export default function IdentitySetup({ onIdentityCreated }: IdentitySetupProps)
             <div className="qr-placeholder card">
               <span className="text-muted">QR Payload</span>
               <code>{identity.qr_data}</code>
+            </div>
+            <div className="fingerprint-display card">
+              <span className="text-muted">Generation</span>
+              <code>{identity.generation}</code>
             </div>
             <p className="text-success">
               The app can now store contacts and open local chat sessions.

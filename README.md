@@ -90,6 +90,34 @@ npm install && npm run build
 npm run tauri build
 ```
 
+### Android Build
+
+Tauri mobile support needs the Android toolchain configured first. The official Tauri prerequisites require Android Studio, `JAVA_HOME`, `ANDROID_HOME`, `NDK_HOME`, and the Android Rust targets before building for Android. See the official Tauri prerequisites and Android signing docs for the current steps:
+
+- Tauri prerequisites: https://v2.tauri.app/start/prerequisites/
+- Android signing: https://v2.tauri.app/distribute/sign/android/
+
+Local Android flow:
+
+```bash
+# one-time project generation
+npm run android:init
+
+# debug on device/emulator
+npm run android:dev
+
+# release artifacts (APK / AAB)
+npm run android:build
+```
+
+The GitHub Actions workflow now has a `build-android` job that:
+
+- initializes `src-tauri/gen/android` when it is missing
+- builds the Android target with `npm run tauri android build`
+- uploads generated `.apk` and `.aab` artifacts
+
+Unsigned APKs can still be uploaded as CI artifacts, but Play Store distribution requires keystore configuration in the generated Android Gradle project.
+
 ## Project Structure
 
 ```
