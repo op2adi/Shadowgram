@@ -17,6 +17,8 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519Secret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use shadowgram_crypto::aead::AeadCipher;
+
 /// Identity generation errors
 #[derive(Error, Debug)]
 pub enum IdentityError {
@@ -31,6 +33,26 @@ pub enum IdentityError {
 
     #[error("Signature verification failed")]
     SignatureVerificationFailed,
+
+    #[error("Decryption failed: {0}")]
+    DecryptionFailed(String),
+}
+
+#[derive(Serialize, Deserialize)]
+struct EncryptedIdentityBlob {
+    version: u8,
+    nonce: [u8; 12],
+    ciphertext: Vec<u8>,
+    tag: [u8; 16],
+}
+
+#[derive(Serialize, Deserialize)]
+struct IdentitySecretMaterial {
+    x25519_secret: [u8; 32],
+    ed25519_secret: [u8; 32],
+    mlkem_seed: Vec<u8>,
+    created_at: u64,
+    rotated_at: Option<u64>,
 }
 
 /// Complete identity keypair (private - must be protected)
@@ -291,16 +313,75 @@ impl Identity {
     /// Serialize identity for secure storage
     pub fn serialize_encrypted(
         &self,
-        _encryption_key: &[u8; 32],
+        encryption_key: &[u8; 32],
     ) -> Result<Vec<u8>, IdentityError> {
-        // Serialize keys (would be encrypted in production)
-        let mut data = Vec::new();
-        data.extend(
-            bincode::serialize(&self.public)
-                .map_err(|e| IdentityError::SerializationError(e.to_string()))?,
-        );
-        // In production: encrypt private keys before storage
-        Ok(data)
+        let secret = IdentitySecretMaterial {
+            x25519_secret: self.keys.x25519_secret.to_bytes(),
+            ed25519_secret: self.keys.ed25519_secret.to_bytes(),
+            mlkem_seed: self.keys.mlkem_decapsulation_key.to_bytes().to_vec(),
+            created_at: self.created_at,
+            rotated_at: self.rotated_at,
+        };
+        let plaintext = bincode::serialize(&secret)
+            .map_err(|e| IdentityError::SerializationError(e.to_string()))?;
+        let nonce = AeadCipher::generate_nonce();
+        let (ciphertext, tag) = AeadCipher::encrypt_chacha20(
+            encryption_key,
+            &nonce,
+            &plaintext,
+            self.public.fingerprint_full.as_bytes(),
+        )
+        .map_err(|e| IdentityError::SerializationError(e.to_string()))?;
+        bincode::serialize(&EncryptedIdentityBlob {
+            version: 1,
+            nonce,
+            ciphertext,
+            tag,
+        })
+        .map_err(|e| IdentityError::SerializationError(e.to_string()))
+    }
+
+    pub fn deserialize_encrypted(
+        public: PublicIdentity,
+        encrypted: &[u8],
+        encryption_key: &[u8; 32],
+    ) -> Result<Self, IdentityError> {
+        let blob: EncryptedIdentityBlob = bincode::deserialize(encrypted)
+            .map_err(|e| IdentityError::SerializationError(e.to_string()))?;
+        let plaintext = AeadCipher::decrypt_chacha20(
+            encryption_key,
+            &blob.nonce,
+            &blob.ciphertext,
+            &blob.tag,
+            public.fingerprint_full.as_bytes(),
+        )
+        .map_err(|e| IdentityError::DecryptionFailed(e.to_string()))?;
+        let secret: IdentitySecretMaterial = bincode::deserialize(&plaintext)
+            .map_err(|e| IdentityError::SerializationError(e.to_string()))?;
+        let keys = IdentityKeys {
+            x25519_secret: X25519Secret::from(secret.x25519_secret),
+            ed25519_secret: Ed25519Secret::from_bytes(&secret.ed25519_secret),
+            mlkem_decapsulation_key: DecapsulationKey::<MlKem768>::from_seed(
+                secret
+                    .mlkem_seed
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| IdentityError::InvalidFormat("Invalid ML-KEM seed length".into()))?,
+            ),
+        };
+        let derived_public = PublicIdentity::from_keys(&keys)?;
+        if derived_public != public {
+            return Err(IdentityError::InvalidFormat(
+                "Stored private key material does not match public identity".into(),
+            ));
+        }
+
+        Ok(Self {
+            keys,
+            public,
+            created_at: secret.created_at,
+            rotated_at: secret.rotated_at,
+        })
     }
 }
 

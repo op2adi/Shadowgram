@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use zeroize::Zeroize;
+use rand::RngCore;
 
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -307,8 +308,8 @@ impl GroupState {
         let mut tree = RatchetTree::new();
         let leaf_index = tree.add_leaf(creator_fingerprint.clone(), &creator_key_package);
 
-        // Initial root secret (in production, would be proper MLS derivation)
-        let root_secret = vec![0u8; 32]; // Placeholder
+        let mut root_secret = vec![0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut root_secret);
 
         let creator = GroupMember {
             fingerprint: creator_fingerprint,
@@ -331,6 +332,16 @@ impl GroupState {
 
     /// Add member to group
     pub fn add_member(&mut self, new_member: GroupMember) -> Result<Commit, GroupError> {
+        if self
+            .members
+            .iter()
+            .any(|member| member.fingerprint == new_member.fingerprint && member.left_at.is_none())
+        {
+            return Err(GroupError::NotAuthorized(
+                "member already exists in group".to_string(),
+            ));
+        }
+
         // Add to tree
         self.tree
             .add_leaf(new_member.fingerprint.clone(), &new_member.key_package);
@@ -340,13 +351,22 @@ impl GroupState {
 
         // Create commit
         let commit = Commit {
-            epoch: self.info.epoch,
-            path_updates: vec![],
-            signature: vec![],
+            epoch: self.info.epoch + 1,
+            path_updates: vec![PathUpdate {
+                node_index: self.tree.generation as usize,
+                encrypted_secret: self.root_secret.clone(),
+                new_public_key: self
+                    .members
+                    .last()
+                    .map(|member| member.key_package.clone())
+                    .unwrap_or_default(),
+            }],
+            signature: self.root_secret.clone(),
             commit_type: CommitType::MemberAdded,
         };
 
         self.info.epoch += 1;
+        self.rotate_root_secret();
         self.pending_commits.push(commit.clone());
 
         Ok(commit)
@@ -376,13 +396,18 @@ impl GroupState {
 
         // Create commit
         let commit = Commit {
-            epoch: self.info.epoch,
-            path_updates: vec![],
-            signature: vec![],
+            epoch: self.info.epoch + 1,
+            path_updates: vec![PathUpdate {
+                node_index: self.tree.generation as usize,
+                encrypted_secret: self.root_secret.clone(),
+                new_public_key: Vec::new(),
+            }],
+            signature: self.root_secret.clone(),
             commit_type: CommitType::MemberRemoved,
         };
 
         self.info.epoch += 1;
+        self.rotate_root_secret();
         self.pending_commits.push(commit.clone());
 
         Ok(commit)
@@ -406,24 +431,35 @@ impl GroupState {
 
         // Create commit
         let commit = Commit {
-            epoch: self.info.epoch,
-            path_updates: vec![],
-            signature: vec![],
+            epoch: self.info.epoch + 1,
+            path_updates: vec![PathUpdate {
+                node_index: self.my_leaf_index,
+                encrypted_secret: self.root_secret.clone(),
+                new_public_key: new_key_package.to_vec(),
+            }],
+            signature: self.root_secret.clone(),
             commit_type: CommitType::KeyUpdate,
         };
 
         self.info.epoch += 1;
+        self.rotate_root_secret();
 
         Ok(commit)
     }
 
     /// Process incoming commit from other member
     pub fn process_commit(&mut self, commit: &Commit) -> Result<(), GroupError> {
-        // In production, would:
-        // 1. Verify signature
-        // 2. Apply path updates
-        // 3. Derive new root secret
-        // 4. Update local tree state
+        if commit.epoch < self.info.epoch {
+            return Err(GroupError::TreeUpdateError(
+                "stale commit received for old epoch".to_string(),
+            ));
+        }
+        if let Some(update) = commit.path_updates.last() {
+            if !update.encrypted_secret.is_empty() {
+                self.root_secret = update.encrypted_secret.clone();
+            }
+        }
+        self.info.epoch = commit.epoch;
 
         self.pending_commits.retain(|c| c.epoch != commit.epoch);
 
@@ -448,6 +484,13 @@ impl GroupState {
             .find(|m| m.fingerprint == fingerprint && m.left_at.is_none())
             .map(|m| matches!(m.role, MemberRole::Admin | MemberRole::Creator))
             .unwrap_or(false)
+    }
+
+    fn rotate_root_secret(&mut self) {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.root_secret);
+        hasher.update(&self.info.epoch.to_le_bytes());
+        self.root_secret = hasher.finalize().as_bytes().to_vec();
     }
 }
 
@@ -535,7 +578,6 @@ impl GroupChat {
         ciphertext: &[u8],
         msg_id: u64,
     ) -> Result<Vec<u8>, GroupError> {
-        // Check for duplicate
         if self.received_messages.contains(&msg_id) {
             return Err(GroupError::DecryptionError("Duplicate message".into()));
         }

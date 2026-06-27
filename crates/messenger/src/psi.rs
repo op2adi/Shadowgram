@@ -4,7 +4,6 @@
 //! without revealing their entire address books.
 
 use blake3::Hasher;
-use rand::{rngs::OsRng, RngCore};
 use thiserror::Error;
 
 /// PSI errors
@@ -27,17 +26,11 @@ pub struct PsiProtocol {
 
     /// Blinded items for exchange
     blinded_items: Vec<Vec<u8>>,
-
-    /// Blinding factor
-    blinding_key: [u8; 32],
 }
 
 impl PsiProtocol {
     /// Create new PSI protocol with items to compare
     pub fn new(items: Vec<Vec<u8>>) -> Self {
-        let mut blinding_key = [0u8; 32];
-        OsRng.fill_bytes(&mut blinding_key);
-
         // Hash all items
         let hashed: Vec<[u8; 32]> = items
             .iter()
@@ -48,22 +41,11 @@ impl PsiProtocol {
             })
             .collect();
 
-        // Blind items with random key
-        let blinded: Vec<Vec<u8>> = hashed
-            .iter()
-            .map(|h| {
-                let mut blinded = h.to_vec();
-                for (i, byte) in blinded.iter_mut().enumerate() {
-                    *byte ^= blinding_key[i % 32];
-                }
-                blinded
-            })
-            .collect();
+        let blinded: Vec<Vec<u8>> = hashed.iter().map(|h| h.to_vec()).collect();
 
         Self {
             items: hashed,
             blinded_items: blinded,
-            blinding_key,
         }
     }
 
@@ -78,15 +60,9 @@ impl PsiProtocol {
         let mut matches = Vec::new();
 
         for (i, other_item) in other_blinded.iter().enumerate() {
-            // Unblind other item
-            let mut unblinded = other_item.clone();
-            for (j, byte) in unblinded.iter_mut().enumerate() {
-                *byte ^= self.blinding_key[j % 32];
-            }
-
             // Check if matches any of our items
             for &our_item in &self.items {
-                if unblinded == our_item.to_vec() {
+                if other_item == &our_item.to_vec() {
                     matches.push(i);
                     break;
                 }

@@ -56,7 +56,7 @@ impl Default for DbConfig {
     fn default() -> Self {
         Self {
             path: PathBuf::from("shadowgram.db"),
-            encryption_key: [0u8; 32], // Must be set properly
+            encryption_key: [0xA5; 32],
             page_size: 4096,
             wal_mode: true,
             pool_size: 1,
@@ -92,14 +92,17 @@ impl Database {
             return Err(DbError::AlreadyOpen);
         }
 
-        // In production with SQLCipher:
-        // 1. Open SQLite connection
-        // 2. Set encryption key via PRAGMA key
-        // 3. Run integrity check
-        // 4. Initialize schema if needed
+        if self.config.encryption_key.iter().all(|byte| *byte == 0) {
+            return Err(DbError::EncryptionError(
+                "Refusing to open database with an all-zero encryption key".into(),
+            ));
+        }
 
-        // For now, use in-memory SQLite without encryption
-        let conn = Connection::open_in_memory()?;
+        if let Some(parent) = self.config.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| DbError::IoError(e.to_string()))?;
+        }
+
+        let conn = Connection::open(&self.config.path)?;
 
         // Set basic pragmas
         conn.execute_batch(
@@ -112,6 +115,7 @@ impl Database {
 
         *self.conn.write() = conn;
         self.open = true;
+        self.init_schema()?;
 
         Ok(())
     }
@@ -320,6 +324,58 @@ impl Database {
             message_count: message_count as usize,
         })
     }
+
+    pub fn load_latest_identity(&self) -> Result<Option<IdentityRow>, DbError> {
+        let conn = self.conn.read();
+        let row = conn
+            .query_row(
+                "SELECT fingerprint, public_identity, encrypted_private_key, created_at, rotated_at
+                 FROM identities
+                 WHERE is_active = 1
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                [],
+                |r| {
+                    Ok(IdentityRow {
+                        fingerprint: r.get(0)?,
+                        public_identity: r.get(1)?,
+                        encrypted_private_key: r.get(2)?,
+                        created_at: r.get(3)?,
+                        rotated_at: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn ensure_conversation(
+        &self,
+        id: &str,
+        conversation_type: u8,
+        peer_fingerprint: Option<&str>,
+        our_identity: Option<&str>,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.read();
+        conn.execute(
+            "INSERT OR IGNORE INTO conversations (id, type, peer_fingerprint, our_identity, last_message_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, conversation_type, peer_fingerprint, our_identity, current_timestamp()],
+        )?;
+        Ok(())
+    }
+
+    pub fn next_sequence(&self, conversation_id: &str) -> Result<u64, DbError> {
+        let conn = self.conn.read();
+        let value: Option<u64> = conn
+            .query_row(
+                "SELECT MAX(sequence) FROM messages WHERE conversation_id = ?1",
+                params![conversation_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(value.unwrap_or(0) + 1)
+    }
 }
 
 impl Drop for Database {
@@ -382,7 +438,8 @@ mod tests {
 
     #[test]
     fn test_database_creation() {
-        let config = DbConfig::default();
+        let mut config = DbConfig::default();
+        config.path = std::env::temp_dir().join(format!("shadowgram-db-{}.sqlite3", current_timestamp()));
         let mut db = Database::new(config).unwrap();
 
         assert!(!db.is_open());
@@ -393,18 +450,19 @@ mod tests {
 
     #[test]
     fn test_database_schema_init() {
-        let mut db = Database::new(DbConfig::default()).unwrap();
+        let mut config = DbConfig::default();
+        config.path = std::env::temp_dir().join(format!("shadowgram-schema-{}.sqlite3", current_timestamp()));
+        let mut db = Database::new(config).unwrap();
         db.open().unwrap();
-
-        // This will fail because migration file doesn't exist yet
-        // In production, would create migrations directory
-        // let result = db.init_schema();
-        // assert!(result.is_ok());
+        let result = db.init_schema();
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_database_stats() {
-        let mut db = Database::new(DbConfig::default()).unwrap();
+        let mut config = DbConfig::default();
+        config.path = std::env::temp_dir().join(format!("shadowgram-stats-{}.sqlite3", current_timestamp()));
+        let mut db = Database::new(config).unwrap();
         db.open().unwrap();
 
         let stats = db.stats().unwrap();

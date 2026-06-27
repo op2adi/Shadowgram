@@ -12,7 +12,7 @@
 
 use libp2p::{
     kad::{Event as KademliaEvent, RecordKey},
-    multiaddr::Multiaddr,
+    multiaddr::{Multiaddr, Protocol},
     PeerId,
 };
 use std::collections::HashMap;
@@ -208,16 +208,22 @@ impl PeerInfo {
 
     /// Check if peer has onion address
     pub fn has_onion_address(&self) -> bool {
-        self.addresses
-            .iter()
-            .any(|a| a.to_string().contains(".onion"))
+        self.addresses.iter().any(|address| {
+            address.iter().any(|protocol| {
+                matches!(protocol, Protocol::Onion(_, _) | Protocol::Onion3(_))
+            }) || address.to_string().contains(".onion")
+        })
     }
 
     /// Get first onion address if available
     pub fn onion_address(&self) -> Option<&Multiaddr> {
         self.addresses
             .iter()
-            .find(|a| a.to_string().contains(".onion"))
+            .find(|address| {
+                address.iter().any(|protocol| {
+                    matches!(protocol, Protocol::Onion(_, _) | Protocol::Onion3(_))
+                }) || address.to_string().contains(".onion")
+            })
     }
 }
 
@@ -299,7 +305,6 @@ impl PeerDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libp2p::multiaddr::Protocol;
 
     #[test]
     fn test_dht_node_creation() {
@@ -331,7 +336,7 @@ mod tests {
         assert!(!info1.has_onion_address());
 
         // Onion address
-        let addr2: Multiaddr = "/onion/abcdefghijklmnopqrstuvwxyz234567:8080"
+        let addr2: Multiaddr = "/onion3/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:8080"
             .parse()
             .unwrap();
         let info2 = PeerInfo::new(peer_id, vec![addr2]);

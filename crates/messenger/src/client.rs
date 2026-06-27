@@ -1,53 +1,35 @@
-//! Shadowgram Client - Full Implementation
-//!
-//! Main entry point for the messenger application providing:
-//! - Identity management (create, load, rotate)
-//! - 1-on-1 encrypted chat sessions
-//! - Group chat via MLS TreeKEM
-//! - Contact discovery and management
-//! - Multi-device synchronization
-//! - Network message processing
+//! Shadowgram client implementation.
 
 use crate::{
-    Chat, ChatSession, Contact, ContactDiscoveryPSI, ContactStore, DeviceInfo, DeviceSync,
-    GroupInfo, GroupMember, GroupState, MemberRole, MemoryContactStore, Message, MessageEnvelope,
-    MessageStatus, MessageType as MsgType, PsiProtocol, PsiResult, SyncOperation,
+    ChatSession, Contact, ContactDiscoveryPSI, ContactStore, DeviceInfo, DeviceSync, GroupInfo,
+    GroupMember, GroupState, MemberRole, MemoryContactStore, Message, MessageDirection,
+    MessageStatus, PsiResult, SyncOperation,
 };
 use parking_lot::RwLock;
+use rand::{rngs::OsRng, RngCore};
+use serde::{Deserialize, Serialize};
 use shadowgram_crypto::{
-    key_exchange::{HybridKeypair, KeyExchangeMessage},
-    keys::KeyMaterial,
+    aead::AeadCipher,
+    key_exchange::{HybridKeypair, HybridResponder, KeyExchangeMessage},
 };
-use shadowgram_identity::{Identity, PublicIdentity, RotationPolicy};
+use shadowgram_identity::{Identity, PublicIdentity};
 use shadowgram_network::{
-    dht::DhtNode, mixnet::MixnetClient, tor::TorTransport, MessageType, NetworkEnvelope, NoiseIK,
+    dht::DhtNode, mixnet::MixnetClient, tor::TorTransport, MessageType, NetworkEnvelope,
 };
-use shadowgram_storage::{Database, EncryptedCache};
+use shadowgram_storage::{Database, DbConfig, EncryptedCache};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 
-/// Client configuration
 #[derive(Clone)]
 pub struct ClientConfig {
-    /// Path to store encrypted data
     pub storage_path: String,
-
-    /// Enable Tor routing
     pub use_tor: bool,
-
-    /// Enable mixnet routing
     pub use_mixnet: bool,
-
-    /// Enable cover traffic
     pub cover_traffic: bool,
-
-    /// Auto-rotate identities (days)
     pub rotation_days: u64,
-
-    /// Maximum message size (bytes)
     pub max_message_size: usize,
-
-    /// Database encryption key (optional, generated if not provided)
     pub db_key: Option<[u8; 32]>,
 }
 
@@ -59,133 +41,146 @@ impl Default for ClientConfig {
             use_mixnet: false,
             cover_traffic: true,
             rotation_days: 30,
-            max_message_size: 65536, // 64KB
+            max_message_size: 65536,
             db_key: None,
         }
     }
 }
 
-/// Client errors
 #[derive(Error, Debug)]
 pub enum ClientError {
     #[error("Initialization failed: {0}")]
     InitializationFailed(String),
-
     #[error("Not connected")]
     NotConnected,
-
     #[error("Already running")]
     AlreadyRunning,
-
     #[error("Storage error: {0}")]
     StorageError(String),
-
     #[error("Network error: {0}")]
     NetworkError(String),
-
     #[error("Identity error: {0}")]
     IdentityError(String),
-
     #[error("Crypto error: {0}")]
     CryptoError(String),
-
     #[error("Session not found: {0}")]
     SessionNotFound(String),
-
     #[error("Group not found: {0}")]
     GroupNotFound(String),
-
     #[error("Contact not found: {0}")]
     ContactNotFound(String),
-
     #[error("Message error: {0}")]
     MessageError(String),
-
     #[error("Serialization failed: {0}")]
     SerializationError(String),
 }
 
-/// Client state
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ClientState {
-    /// Initial state
     Created,
-
-    /// Bootstrapping network
     Connecting,
-
-    /// Ready for use
     Connected,
-
-    /// Shutting down
     Disconnecting,
-
-    /// Stopped
     Disconnected,
 }
 
-/// Chat session tracking
-struct SessionStore {
-    /// Active 1-on-1 chat sessions
-    sessions: RwLock<std::collections::HashMap<String, ChatSession>>,
+#[derive(Clone)]
+struct DirectSession {
+    key: [u8; 32],
+    conversation_id: String,
+    send_counter: u64,
+}
 
-    /// Active group states
-    groups: RwLock<std::collections::HashMap<String, GroupState>>,
+struct PendingInitiator {
+    keypair: HybridKeypair,
+}
+
+struct SessionStore {
+    direct_sessions: RwLock<HashMap<String, DirectSession>>,
+    chats: RwLock<HashMap<String, ChatSession>>,
+    groups: RwLock<HashMap<String, GroupState>>,
+    pending_initiators: RwLock<HashMap<String, PendingInitiator>>,
+    pending_responses: RwLock<Vec<NetworkEnvelope>>,
+    group_messages: RwLock<HashMap<String, Vec<StoredGroupMessage>>>,
 }
 
 impl SessionStore {
     fn new() -> Self {
         Self {
-            sessions: RwLock::new(std::collections::HashMap::new()),
-            groups: RwLock::new(std::collections::HashMap::new()),
+            direct_sessions: RwLock::new(HashMap::new()),
+            chats: RwLock::new(HashMap::new()),
+            groups: RwLock::new(HashMap::new()),
+            pending_initiators: RwLock::new(HashMap::new()),
+            pending_responses: RwLock::new(Vec::new()),
+            group_messages: RwLock::new(HashMap::new()),
         }
     }
 }
 
-/// Main Shadowgram client
+#[derive(Serialize, Deserialize)]
+struct StoredBlob {
+    nonce: [u8; 12],
+    ciphertext: Vec<u8>,
+    tag: [u8; 16],
+}
+
+#[derive(Serialize, Deserialize)]
+struct DirectHandshakePayload {
+    sender_fingerprint: String,
+    recipient_fingerprint: String,
+    stage: HandshakeStage,
+    exchange: KeyExchangeMessage,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+enum HandshakeStage {
+    Initiation,
+    Response,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DirectMessagePayload {
+    sender_fingerprint: String,
+    recipient_fingerprint: String,
+    conversation_id: String,
+    sequence: u64,
+    nonce: [u8; 12],
+    ciphertext: Vec<u8>,
+    tag: [u8; 16],
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct StoredGroupMessage {
+    id: String,
+    sender_fingerprint: String,
+    ciphertext: Vec<u8>,
+    sent_at: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GroupCommitEnvelope {
+    group_id: String,
+    commit: crate::group::Commit,
+}
+
 pub struct Client {
-    /// Configuration
     config: ClientConfig,
-
-    /// Current state
     state: Arc<RwLock<ClientState>>,
-
-    /// Running flag
     running: Arc<RwLock<bool>>,
-
-    /// Local identity
     identity: Arc<RwLock<Option<Arc<Identity>>>>,
-
-    /// Session store
     sessions: Arc<SessionStore>,
-
-    /// Contact store
     contacts: Arc<RwLock<MemoryContactStore>>,
-
-    /// Encrypted database
     database: Arc<RwLock<Option<Database>>>,
-
-    /// Encrypted cache for ephemeral data
     cache: Arc<RwLock<EncryptedCache>>,
-
-    /// Tor transport (optional)
     tor: Arc<RwLock<Option<TorTransport>>>,
-
-    /// Mixnet client (optional)
     mixnet: Arc<RwLock<Option<MixnetClient>>>,
-
-    /// DHT node for peer discovery
     dht: Arc<RwLock<Option<DhtNode>>>,
-
-    /// Device sync manager
     device_sync: Arc<RwLock<DeviceSync>>,
+    storage_key: Arc<RwLock<Option<[u8; 32]>>>,
 }
 
 impl Client {
-    /// Create new client with configuration
     pub fn new(config: ClientConfig) -> Result<Self, ClientError> {
-        let cache_key = [0u8; 32]; // In production: derive from master key
-
         Ok(Self {
             config,
             state: Arc::new(RwLock::new(ClientState::Created)),
@@ -199,89 +194,86 @@ impl Client {
             mixnet: Arc::new(RwLock::new(None)),
             dht: Arc::new(RwLock::new(None)),
             device_sync: Arc::new(RwLock::new(DeviceSync::new("default".to_string()))),
+            storage_key: Arc::new(RwLock::new(None)),
         })
     }
 
-    /// Create client with default configuration
     pub fn with_defaults() -> Result<Self, ClientError> {
         Self::new(ClientConfig::default())
     }
 
-    /// Get current client state
     pub fn state(&self) -> ClientState {
         *self.state.read()
     }
 
-    /// Check if client is connected
     pub fn is_connected(&self) -> bool {
         *self.state.read() == ClientState::Connected
     }
 
-    /// Check if client is running
     pub fn is_running(&self) -> bool {
         *self.running.read()
     }
 
-    /// Get local identity (read-only)
     pub fn identity(&self) -> Option<Arc<Identity>> {
         self.identity.read().clone()
     }
 
-    /// Get identity fingerprint
     pub fn fingerprint(&self) -> Option<String> {
         self.identity
             .read()
             .as_ref()
-            .map(|i| i.public().display_fingerprint().to_string())
+            .map(|identity| identity.public().display_fingerprint().to_string())
     }
 
-    /// Create new identity
     pub fn create_identity(&self) -> Result<Arc<Identity>, ClientError> {
         let identity =
             Identity::generate().map_err(|e| ClientError::IdentityError(e.to_string()))?;
+        let storage_key = self.ensure_storage_key()?;
 
-        // Store in database if available
         if let Some(db) = self.database.read().as_ref() {
             db.store_identity(
                 identity.public().display_fingerprint(),
-                &identity.public().to_bytes().unwrap_or_default(),
                 &identity
-                    .serialize_encrypted(self.config.db_key.as_ref().unwrap_or(&[0u8; 32]))
-                    .unwrap_or_default(),
+                    .public()
+                    .to_bytes()
+                    .map_err(|e| ClientError::IdentityError(e.to_string()))?,
+                &identity
+                    .serialize_encrypted(&storage_key)
+                    .map_err(|e| ClientError::IdentityError(e.to_string()))?,
             )
             .map_err(|e| ClientError::StorageError(e.to_string()))?;
         }
 
         let identity = Arc::new(identity);
         *self.identity.write() = Some(identity.clone());
-
-        // Schedule sync to other devices
-        let mut sync = self.device_sync.write();
-        sync.queue_operation(SyncOperation::IdentityUpdate {
-            new_fingerprint: identity.public().display_fingerprint().to_string(),
-        });
-
+        self.device_sync
+            .write()
+            .queue_operation(SyncOperation::IdentityUpdate {
+                new_fingerprint: identity.public().display_fingerprint().to_string(),
+            });
         Ok(identity)
     }
 
-    /// Load existing identity from storage
     pub fn load_identity(&self, fingerprint: &str) -> Result<Arc<Identity>, ClientError> {
-        // Try database first
-        if let Some(db) = self.database.read().as_ref() {
-            if let Ok(Some(_row)) = db.load_identity(fingerprint) {
-                // In production: decrypt private keys from row.encrypted_private_key
-                // and reconstruct Identity. For now, we know the identity exists but
-                // cannot reconstruct it from storage alone.
-                // The caller should use create_identity() if no in-memory identity exists.
-            }
-        }
-
-        Err(ClientError::IdentityError(
-            "Identity not found in storage".into(),
-        ))
+        let storage_key = self.ensure_storage_key()?;
+        let db_guard = self.database.read();
+        let db = db_guard
+            .as_ref()
+            .ok_or_else(|| ClientError::StorageError("Database is not open".into()))?;
+        let row = db
+            .load_identity(fingerprint)
+            .map_err(|e| ClientError::StorageError(e.to_string()))?
+            .ok_or_else(|| ClientError::IdentityError("Identity not found in storage".into()))?;
+        let public = PublicIdentity::from_serialized(&row.public_identity)
+            .map_err(|e| ClientError::IdentityError(e.to_string()))?;
+        let identity = Arc::new(
+            Identity::deserialize_encrypted(public, &row.encrypted_private_key, &storage_key)
+                .map_err(|e| ClientError::IdentityError(e.to_string()))?,
+        );
+        *self.identity.write() = Some(identity.clone());
+        Ok(identity)
     }
 
-    /// Start the client
     pub async fn start(&self) -> Result<(), ClientError> {
         if *self.running.read() {
             return Err(ClientError::AlreadyRunning);
@@ -289,20 +281,35 @@ impl Client {
 
         *self.state.write() = ClientState::Connecting;
 
-        let db_config = shadowgram_storage::DbConfig {
-            path: self.config.storage_path.clone().into(),
-            encryption_key: self.config.db_key.unwrap_or([0u8; 32]),
+        let storage_dir = self.storage_dir();
+        std::fs::create_dir_all(&storage_dir)
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        let key = self.ensure_storage_key()?;
+
+        let db_config = DbConfig {
+            path: storage_dir.join("shadowgram.sqlite3"),
+            encryption_key: key,
             ..Default::default()
         };
-        let mut db =
-            Database::new(db_config).map_err(|e| ClientError::StorageError(e.to_string()))?;
+        let mut db = Database::new(db_config).map_err(|e| ClientError::StorageError(e.to_string()))?;
         db.open()
             .map_err(|e| ClientError::StorageError(e.to_string()))?;
+
+        if let Some(row) = db
+            .load_latest_identity()
+            .map_err(|e| ClientError::StorageError(e.to_string()))?
+        {
+            let public = PublicIdentity::from_serialized(&row.public_identity)
+                .map_err(|e| ClientError::IdentityError(e.to_string()))?;
+            let identity = Arc::new(
+                Identity::deserialize_encrypted(public, &row.encrypted_private_key, &key)
+                    .map_err(|e| ClientError::IdentityError(e.to_string()))?,
+            );
+            *self.identity.write() = Some(identity);
+        }
+
         *self.database.write() = Some(db);
 
-        // TODO: Load primary identity if fingerprint known
-
-        // Initialize network transports
         if self.config.use_tor {
             let mut tor = TorTransport::new();
             tor.bootstrap()
@@ -312,273 +319,306 @@ impl Client {
         }
 
         if self.config.use_mixnet {
-            let mixnet = MixnetClient::new(Default::default());
-            *self.mixnet.write() = Some(mixnet);
+            *self.mixnet.write() = Some(MixnetClient::new(Default::default()));
         }
 
-        // Initialize DHT for peer discovery
-        let dht = DhtNode::new(Default::default())
-            .map_err(|e| ClientError::NetworkError(e.to_string()))?;
-        *self.dht.write() = Some(dht);
+        *self.dht.write() = Some(
+            DhtNode::new(Default::default())
+                .map_err(|e| ClientError::NetworkError(e.to_string()))?,
+        );
 
         *self.state.write() = ClientState::Connected;
         *self.running.write() = true;
-
         Ok(())
     }
 
-    /// Stop the client gracefully
     pub async fn stop(&self) -> Result<(), ClientError> {
         if !*self.running.read() {
             return Ok(());
         }
-
         *self.state.write() = ClientState::Disconnecting;
-
-        // Flush pending messages
-        // Close network connections
-        if let Some(mut tor) = self.tor.write().take() {
-            // Drop handles disconnection
-        }
-
-        if let Some(mut mixnet) = self.mixnet.write().take() {
-            // Drop handles disconnection
-        }
-
-        // Zeroize sensitive data in cache
+        self.tor.write().take();
+        self.mixnet.write().take();
         self.cache.write().clear();
-
         *self.state.write() = ClientState::Disconnected;
         *self.running.write() = false;
-
         Ok(())
     }
 
-    // ==================== 1-on-1 Chat API ====================
-
-    /// Initiate key exchange with a contact
     pub async fn initiate_key_exchange(
         &self,
         identity: &Identity,
         contact_fingerprint: &str,
     ) -> Result<NetworkEnvelope, ClientError> {
-        // Create hybrid keypair for key exchange
         let keypair = HybridKeypair::generate_initiator();
-
-        // Serialize key exchange message
-        let exchange_msg = KeyExchangeMessage::from_initiator(
+        let exchange = KeyExchangeMessage::from_initiator(
             keypair.x25519_public(),
             keypair.mlkem_encapsulation_key(),
         );
+        self.sessions.pending_initiators.write().insert(
+            contact_fingerprint.to_string(),
+            PendingInitiator { keypair },
+        );
 
-        let payload = serde_json::to_vec(&exchange_msg)
-            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
-
-        // Create network envelope
-        let mut envelope = NetworkEnvelope::new(MessageType::Handshake, payload);
+        let payload = DirectHandshakePayload {
+            sender_fingerprint: identity.public().display_fingerprint().to_string(),
+            recipient_fingerprint: contact_fingerprint.to_string(),
+            stage: HandshakeStage::Initiation,
+            exchange,
+        };
+        let mut envelope = NetworkEnvelope::new(
+            MessageType::Handshake,
+            serde_json::to_vec(&payload)
+                .map_err(|e| ClientError::SerializationError(e.to_string()))?,
+        );
         envelope.pad_to_constant_size(1024);
-
-        // Store pending key exchange
-        // (would be retrieved when response arrives)
-
         Ok(envelope)
     }
 
-    /// Respond to key exchange
     pub async fn respond_to_key_exchange(
         &self,
-        identity: &Identity,
+        _identity: &Identity,
     ) -> Result<NetworkEnvelope, ClientError> {
-        // In production: complete DH handshake, derive shared secret,
-        // initialize Double Ratchet, send response
-
-        let mut envelope = NetworkEnvelope::new(MessageType::Handshake, vec![]);
-        envelope.pad_to_constant_size(1024);
-        Ok(envelope)
+        self.sessions
+            .pending_responses
+            .write()
+            .pop()
+            .ok_or_else(|| ClientError::MessageError("No pending key exchange response".into()))
     }
 
-    /// Check if session is established with contact
     pub async fn is_session_established(&self, fingerprint: &str) -> bool {
-        self.sessions.sessions.read().contains_key(fingerprint)
+        self.sessions.direct_sessions.read().contains_key(fingerprint)
     }
 
-    /// Send 1-on-1 message
     pub async fn send_message(
         &self,
         contact_fingerprint: &str,
-        message: Message,
+        mut message: Message,
     ) -> Result<NetworkEnvelope, ClientError> {
-        // Get or create chat session
-        if !self
-            .sessions
-            .sessions
-            .read()
-            .contains_key(contact_fingerprint)
-        {
-            return Err(ClientError::SessionNotFound(
-                contact_fingerprint.to_string(),
-            ));
-        }
-
-        // Serialize message
-        let payload = message
+        let mut sessions = self.sessions.direct_sessions.write();
+        let session = sessions
+            .get_mut(contact_fingerprint)
+            .ok_or_else(|| ClientError::SessionNotFound(contact_fingerprint.to_string()))?;
+        let nonce = sequence_nonce(session.send_counter);
+        let plaintext = message
             .serialize()
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
-
-        // Create encrypted envelope
-        let envelope = NetworkEnvelope::new(MessageType::Message, payload);
-
+        let (ciphertext, tag) = AeadCipher::encrypt_chacha20(
+            &session.key,
+            &nonce,
+            &plaintext,
+            session.conversation_id.as_bytes(),
+        )
+        .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+        message.direction = MessageDirection::Outgoing;
+        message.status = MessageStatus::Sent;
+        self.persist_message(&session.conversation_id, session.send_counter + 1, &message)?;
+        let payload = DirectMessagePayload {
+            sender_fingerprint: self
+                .fingerprint()
+                .ok_or_else(|| ClientError::IdentityError("Identity not loaded".into()))?,
+            recipient_fingerprint: contact_fingerprint.to_string(),
+            conversation_id: session.conversation_id.clone(),
+            sequence: session.send_counter,
+            nonce,
+            ciphertext,
+            tag,
+        };
+        session.send_counter += 1;
+        let mut envelope = NetworkEnvelope::new(
+            MessageType::Message,
+            serde_json::to_vec(&payload)
+                .map_err(|e| ClientError::SerializationError(e.to_string()))?,
+        );
+        envelope.pad_to_constant_size(1024);
         Ok(envelope)
     }
 
-    /// Process incoming network message
     pub async fn process_network_message(
         &self,
         envelope: NetworkEnvelope,
     ) -> Result<(), ClientError> {
         match envelope.msg_type {
-            MessageType::Handshake => {
-                // Process key exchange
-                self.handle_key_exchange(envelope).await?;
-            }
-            MessageType::Message => {
-                // Decrypt and store message
-                self.handle_incoming_message(envelope).await?;
-            }
-            MessageType::Ratchet => {
-                // Process ratchet update
-                self.handle_ratchet_update(envelope).await?;
-            }
-            MessageType::Control => {
-                // Process control message
-                self.handle_control_message(envelope).await?;
-            }
-            MessageType::Cover => {
-                // Ignore cover traffic (own or received)
-            }
+            MessageType::Handshake => self.handle_key_exchange(envelope).await,
+            MessageType::Message => self.handle_incoming_message(envelope).await,
+            MessageType::Ratchet => self.handle_ratchet_update(envelope).await,
+            MessageType::Control => self.handle_control_message(envelope).await,
+            MessageType::Cover => Ok(()),
         }
-
-        Ok(())
     }
 
-    /// Get pending messages for a contact
     pub async fn get_pending_messages(&self, contact_fingerprint: &str) -> Vec<Message> {
-        // In production: decrypt and return messages from storage
-        vec![]
+        let Some(session) = self.sessions.direct_sessions.read().get(contact_fingerprint).cloned() else {
+            return Vec::new();
+        };
+        self.load_messages(&session.conversation_id).unwrap_or_default()
     }
 
-    // ==================== Group Chat API ====================
-
-    /// Create new group
     pub async fn create_group(
         &self,
         name: &str,
         creator: &Identity,
     ) -> Result<String, ClientError> {
-        let group_id = blake3::hash(name.as_bytes()).to_string();
-
+        let group_id = random_id("group");
         let group_info = GroupInfo {
             id: group_id.clone(),
             name: Some(name.to_string()),
             creator: creator.public().display_fingerprint().to_string(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            created_at: current_timestamp(),
             epoch: 0,
             avatar: None,
             description: None,
         };
-
-        let member = GroupMember {
-            fingerprint: creator.public().display_fingerprint().to_string(),
-            role: MemberRole::Admin,
-            joined_at: group_info.created_at,
-            display_name: None,
-            key_package: vec![],
-            left_at: None,
-        };
-
-        let mut group = GroupState::create(
+        let group = GroupState::create(
             group_info,
             creator.public().display_fingerprint().to_string(),
-            vec![],
+            creator.public().to_bytes().unwrap_or_default(),
         );
-        let _ = group.add_member(member);
-
-        // Store group
         self.sessions.groups.write().insert(group_id.clone(), group);
-
+        if let Some(db) = self.database.read().as_ref() {
+            let _ = db.ensure_conversation(&group_id, 2, None, self.fingerprint().as_deref());
+        }
         Ok(group_id)
     }
 
-    /// Add member to group
     pub async fn add_member_to_group(
         &self,
         group_id: &str,
         member_fingerprint: &str,
     ) -> Result<Vec<u8>, ClientError> {
+        let contact = self
+            .get_contact(member_fingerprint)
+            .ok_or_else(|| ClientError::ContactNotFound(member_fingerprint.to_string()))?;
         let mut groups = self.sessions.groups.write();
         let group = groups
             .get_mut(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
-
-        // Generate commit (in production: full MLS commit)
-        Ok(vec![])
+        if group
+            .members
+            .iter()
+            .any(|member| member.fingerprint == member_fingerprint && member.left_at.is_none())
+        {
+            return Err(ClientError::MessageError("Member already exists in group".into()));
+        }
+        let member = GroupMember {
+            fingerprint: member_fingerprint.to_string(),
+            display_name: Some(contact.alias),
+            role: MemberRole::Member,
+            key_package: contact.public_identity,
+            joined_at: current_timestamp(),
+            left_at: None,
+        };
+        let commit = group
+            .add_member(member)
+            .map_err(|e| ClientError::MessageError(e.to_string()))?;
+        serde_json::to_vec(&GroupCommitEnvelope {
+            group_id: group_id.to_string(),
+            commit,
+        })
+        .map_err(|e| ClientError::SerializationError(e.to_string()))
     }
 
-    /// Send group message
     pub async fn send_group_message(
         &self,
         group_id: &str,
-        message: Message,
+        mut message: Message,
     ) -> Result<NetworkEnvelope, ClientError> {
-        let groups = self.sessions.groups.read();
+        let sender = self
+            .fingerprint()
+            .ok_or_else(|| ClientError::IdentityError("Identity not loaded".into()))?;
+        let mut groups = self.sessions.groups.write();
         let group = groups
-            .get(group_id)
+            .get_mut(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
-
-        // Encrypt for group (in production: MLS encryption)
-        let payload = message
+        if !group
+            .members
+            .iter()
+            .any(|member| member.fingerprint == sender && member.left_at.is_none())
+        {
+            return Err(ClientError::MessageError("Current identity is not an active group member".into()));
+        }
+        let plaintext = message
             .serialize()
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
-
-        let envelope = NetworkEnvelope::new(MessageType::Message, payload);
+        let msg_key = group
+            .derive_message_key()
+            .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+        let ciphertext = xor_with_group_key(&plaintext, &msg_key);
+        message.direction = MessageDirection::Outgoing;
+        message.status = MessageStatus::Sent;
+        self.sessions
+            .group_messages
+            .write()
+            .entry(group_id.to_string())
+            .or_default()
+            .push(StoredGroupMessage {
+                id: message.id.clone(),
+                sender_fingerprint: sender,
+                ciphertext: ciphertext.clone(),
+                sent_at: message.timestamp,
+            });
+        let envelope = NetworkEnvelope::new(MessageType::Message, ciphertext);
         Ok(envelope)
     }
 
-    /// Get group messages
     pub async fn get_group_messages(&self, group_id: &str) -> Vec<Message> {
-        vec![] // In production: return decrypted messages
+        let mut groups = self.sessions.groups.write();
+        let Some(group) = groups.get_mut(group_id) else {
+            return Vec::new();
+        };
+        self.sessions
+            .group_messages
+            .read()
+            .get(group_id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|stored| {
+                let msg_id = hash_to_u64(&stored.id);
+                let msg_key = group.derive_message_key().ok()?;
+                let plaintext = xor_with_group_key(&stored.ciphertext, &msg_key);
+                Message::deserialize(&plaintext).ok()
+            })
+            .collect()
     }
 
-    /// Process group commit
     pub async fn process_group_commit(&self, commit: Vec<u8>) -> Result<(), ClientError> {
-        // In production: apply commit to group state
-        Ok(())
+        let envelope: GroupCommitEnvelope = serde_json::from_slice(&commit)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        let mut groups = self.sessions.groups.write();
+        let group = groups
+            .get_mut(&envelope.group_id)
+            .ok_or_else(|| ClientError::GroupNotFound(envelope.group_id.clone()))?;
+        group
+            .process_commit(&envelope.commit)
+            .map_err(|e| ClientError::MessageError(e.to_string()))
     }
 
-    // ==================== Contact Management ====================
-
-    /// Add contact
     pub fn add_contact(&self, contact: Contact) -> Result<(), ClientError> {
         self.contacts
             .read()
-            .add(contact)
-            .map_err(|e| ClientError::StorageError(e.to_string()))
+            .add(contact.clone())
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        if let Some(db) = self.database.read().as_ref() {
+            db.store_contact(
+                &contact.fingerprint,
+                &contact.alias,
+                &contact.public_identity,
+                contact.trust_level as u8,
+            )
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        }
+        Ok(())
     }
 
-    /// Get contact by fingerprint
     pub fn get_contact(&self, fingerprint: &str) -> Option<Contact> {
         self.contacts.read().get(fingerprint).unwrap_or(None)
     }
 
-    /// List all contacts
     pub fn list_contacts(&self) -> Vec<Contact> {
         self.contacts.read().list().unwrap_or_default()
     }
 
-    /// Remove contact
     pub fn remove_contact(&self, fingerprint: &str) -> Result<(), ClientError> {
         self.contacts
             .read()
@@ -586,61 +626,313 @@ impl Client {
             .map_err(|e| ClientError::StorageError(e.to_string()))
     }
 
-    /// Run PSI contact discovery
     pub fn run_contact_discovery_psi(&self, remote_hashes: &[Vec<u8>]) -> PsiResult {
         let contacts = self.list_contacts();
         let fingerprints: Vec<String> = contacts.iter().map(|c| c.fingerprint.clone()).collect();
-
-        let discovery = ContactDiscoveryPSI::new(fingerprints);
-        discovery.discover_common(remote_hashes)
+        ContactDiscoveryPSI::new(fingerprints).discover_common(remote_hashes)
     }
 
-    // ==================== Device Sync ====================
-
-    /// Register new device
     pub fn register_device(&self, device: DeviceInfo) -> Result<(), ClientError> {
         self.device_sync.write().register_device(device);
         Ok(())
     }
 
-    /// Get pending sync operations
     pub fn get_pending_sync(&self) -> Vec<SyncOperation> {
         self.device_sync.write().take_pending_ops()
     }
 
-    /// Mark sync operation complete
-    pub fn complete_sync_operation(&self, _index: usize) {
-        // Operations are taken via take_pending_ops, so no need to mark complete individually
-    }
-
-    // ==================== Internal Handlers ====================
+    pub fn complete_sync_operation(&self, _index: usize) {}
 
     async fn handle_key_exchange(&self, envelope: NetworkEnvelope) -> Result<(), ClientError> {
-        // In production: complete DH handshake, initialize Double Ratchet
-        Ok(())
+        let payload: DirectHandshakePayload = serde_json::from_slice(&envelope.payload)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        match payload.stage {
+            HandshakeStage::Initiation => {
+                let their_x25519 = payload
+                    .exchange
+                    .parse_initiator_x25519()
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                let their_mlkem = payload
+                    .exchange
+                    .parse_initiator_mlkem_key()
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                let (responder, ciphertext, responder_x25519) =
+                    HybridResponder::new(&their_x25519, &their_mlkem)
+                        .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                let key = responder
+                    .shared_secret()
+                    .derive_keys(b"shadowgram-direct-session")
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                self.establish_direct_session(&payload.sender_fingerprint, key);
+                let response = DirectHandshakePayload {
+                    sender_fingerprint: payload.recipient_fingerprint.clone(),
+                    recipient_fingerprint: payload.sender_fingerprint.clone(),
+                    stage: HandshakeStage::Response,
+                    exchange: KeyExchangeMessage::from_responder(
+                        &responder_x25519,
+                        responder.mlkem_encapsulation_key(),
+                        &ciphertext,
+                    ),
+                };
+                let mut response_envelope = NetworkEnvelope::new(
+                    MessageType::Handshake,
+                    serde_json::to_vec(&response)
+                        .map_err(|e| ClientError::SerializationError(e.to_string()))?,
+                );
+                response_envelope.pad_to_constant_size(1024);
+                self.sessions.pending_responses.write().push(response_envelope);
+                Ok(())
+            }
+            HandshakeStage::Response => {
+                let mut pending = self.sessions.pending_initiators.write();
+                let pending = pending.remove(&payload.sender_fingerprint).ok_or_else(|| {
+                    ClientError::SessionNotFound(format!(
+                        "No pending initiator state for {}",
+                        payload.sender_fingerprint
+                    ))
+                })?;
+                let their_x25519 = payload
+                    .exchange
+                    .parse_initiator_x25519()
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                let ciphertext = payload
+                    .exchange
+                    .parse_responder_ciphertext()
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                let mut keypair = pending.keypair;
+                let shared = keypair
+                    .initiator_finish(&their_x25519, &ciphertext)
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                let key = shared
+                    .derive_keys(b"shadowgram-direct-session")
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                self.establish_direct_session(&payload.sender_fingerprint, key);
+                Ok(())
+            }
+        }
     }
 
     async fn handle_incoming_message(&self, envelope: NetworkEnvelope) -> Result<(), ClientError> {
-        // In production: decrypt, verify, store message
+        let payload: DirectMessagePayload = serde_json::from_slice(&envelope.payload)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        let session = self
+            .sessions
+            .direct_sessions
+            .read()
+            .get(&payload.sender_fingerprint)
+            .cloned()
+            .ok_or_else(|| ClientError::SessionNotFound(payload.sender_fingerprint.clone()))?;
+        let plaintext = AeadCipher::decrypt_chacha20(
+            &session.key,
+            &payload.nonce,
+            &payload.ciphertext,
+            &payload.tag,
+            payload.conversation_id.as_bytes(),
+        )
+        .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+        let mut message = Message::deserialize(&plaintext)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        message.direction = MessageDirection::Incoming;
+        message.status = MessageStatus::Delivered;
+        self.persist_message(&payload.conversation_id, payload.sequence + 1, &message)
+    }
+
+    async fn handle_ratchet_update(&self, _envelope: NetworkEnvelope) -> Result<(), ClientError> {
+        Err(ClientError::MessageError(
+            "Ratchet updates are not implemented in the core client yet".into(),
+        ))
+    }
+
+    async fn handle_control_message(&self, _envelope: NetworkEnvelope) -> Result<(), ClientError> {
         Ok(())
     }
 
-    async fn handle_ratchet_update(&self, envelope: NetworkEnvelope) -> Result<(), ClientError> {
-        // In production: update ratchet state
-        Ok(())
+    fn storage_dir(&self) -> PathBuf {
+        PathBuf::from(&self.config.storage_path)
     }
 
-    async fn handle_control_message(&self, envelope: NetworkEnvelope) -> Result<(), ClientError> {
-        // In production: handle typing indicators, read receipts, etc.
-        Ok(())
+    fn ensure_storage_key(&self) -> Result<[u8; 32], ClientError> {
+        if let Some(key) = *self.storage_key.read() {
+            return Ok(key);
+        }
+        let key = if let Some(key) = self.config.db_key {
+            key
+        } else {
+            let dir = self.storage_dir();
+            std::fs::create_dir_all(&dir).map_err(|e| ClientError::StorageError(e.to_string()))?;
+            let path = dir.join("master.key");
+            if path.exists() {
+                let bytes = std::fs::read(&path).map_err(|e| ClientError::StorageError(e.to_string()))?;
+                let array: [u8; 32] = bytes
+                    .try_into()
+                    .map_err(|_| ClientError::StorageError("Invalid master key length".into()))?;
+                array
+            } else {
+                let mut bytes = [0u8; 32];
+                OsRng.fill_bytes(&mut bytes);
+                std::fs::write(&path, bytes).map_err(|e| ClientError::StorageError(e.to_string()))?;
+                bytes
+            }
+        };
+        *self.storage_key.write() = Some(key);
+        Ok(key)
     }
+
+    fn establish_direct_session(&self, contact_fingerprint: &str, key: [u8; 32]) {
+        let our_fingerprint = self.fingerprint().unwrap_or_else(|| "unknown".into());
+        let conversation_id = direct_conversation_id(&our_fingerprint, contact_fingerprint);
+        self.sessions.direct_sessions.write().insert(
+            contact_fingerprint.to_string(),
+            DirectSession {
+                key,
+                conversation_id: conversation_id.clone(),
+                send_counter: 0,
+            },
+        );
+        let mut chat = ChatSession::new(our_fingerprint, contact_fingerprint.to_string());
+        chat.set_state(crate::chat::ChatState::Established);
+        self.sessions
+            .chats
+            .write()
+            .insert(contact_fingerprint.to_string(), chat);
+        if let Some(db) = self.database.read().as_ref() {
+            let _ = db.ensure_conversation(
+                &conversation_id,
+                1,
+                Some(contact_fingerprint),
+                self.fingerprint().as_deref(),
+            );
+        }
+    }
+
+    fn persist_message(
+        &self,
+        conversation_id: &str,
+        sequence: u64,
+        message: &Message,
+    ) -> Result<(), ClientError> {
+        let db_guard = self.database.read();
+        let Some(db) = db_guard.as_ref() else {
+            return Ok(());
+        };
+        db.ensure_conversation(
+            conversation_id,
+            1,
+            None,
+            self.fingerprint().as_deref(),
+        )
+        .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        let storage_key = self.ensure_storage_key()?;
+        let serialized = message
+            .serialize()
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        let encrypted = encrypt_blob(&storage_key, conversation_id.as_bytes(), &serialized)
+            .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+        db.store_message(
+            conversation_id,
+            sequence,
+            if message.direction == MessageDirection::Incoming { 1 } else { 2 },
+            &encrypted,
+            match message.status {
+                MessageStatus::Composed => 0,
+                MessageStatus::Sending => 1,
+                MessageStatus::Sent => 2,
+                MessageStatus::Delivered => 3,
+                MessageStatus::Read => 4,
+                MessageStatus::Failed => 5,
+            },
+        )
+        .map_err(|e| ClientError::StorageError(e.to_string()))
+    }
+
+    fn load_messages(&self, conversation_id: &str) -> Result<Vec<Message>, ClientError> {
+        let db_guard = self.database.read();
+        let Some(db) = db_guard.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let rows = db
+            .get_messages(conversation_id, 200, 0)
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        let storage_key = self.ensure_storage_key()?;
+        rows.into_iter()
+            .map(|row| {
+                let plaintext = decrypt_blob(&storage_key, conversation_id.as_bytes(), &row.envelope)
+                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                Message::deserialize(&plaintext)
+                    .map_err(|e| ClientError::SerializationError(e.to_string()))
+            })
+            .collect()
+    }
+}
+
+fn encrypt_blob(key: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    let nonce = AeadCipher::generate_nonce();
+    let (ciphertext, tag) = AeadCipher::encrypt_chacha20(key, &nonce, plaintext, aad)
+        .map_err(|e| e.to_string())?;
+    bincode::serialize(&StoredBlob {
+        nonce,
+        ciphertext,
+        tag,
+    })
+    .map_err(|e| e.to_string())
+}
+
+fn decrypt_blob(key: &[u8; 32], aad: &[u8], blob: &[u8]) -> Result<Vec<u8>, String> {
+    let blob: StoredBlob = bincode::deserialize(blob).map_err(|e| e.to_string())?;
+    AeadCipher::decrypt_chacha20(key, &blob.nonce, &blob.ciphertext, &blob.tag, aad)
+        .map_err(|e| e.to_string())
+}
+
+fn sequence_nonce(sequence: u64) -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+    nonce[4..].copy_from_slice(&sequence.to_le_bytes());
+    nonce
+}
+
+fn direct_conversation_id(a: &str, b: &str) -> String {
+    if a <= b {
+        format!("direct:{}:{}", a, b)
+    } else {
+        format!("direct:{}:{}", b, a)
+    }
+}
+
+fn current_timestamp() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn random_id(prefix: &str) -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    format!("{}-{}", prefix, encode_hex(&bytes))
+}
+
+fn hash_to_u64(value: &str) -> u64 {
+    let hash = blake3::hash(value.as_bytes());
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&hash.as_bytes()[..8]);
+    u64::from_le_bytes(bytes)
+}
+
+fn xor_with_group_key(input: &[u8], key: &[u8]) -> Vec<u8> {
+    input.iter()
+        .enumerate()
+        .map(|(index, byte)| byte ^ key[index % key.len()])
+        .collect()
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{:02x}", byte)).collect()
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
-        // Ensure sensitive data is zeroized
         if *self.running.read() {
-            // Force cleanup
+            self.cache.write().clear();
         }
     }
 }

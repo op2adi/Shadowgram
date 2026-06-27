@@ -47,25 +47,24 @@ pub struct OnionAddress {
 impl OnionAddress {
     /// Parse onion address (with or without .onion suffix)
     pub fn new(address: &str) -> Result<Self, TorError> {
-        let clean_address = address.trim_end_matches(".onion");
-
-        // Validate format (16 chars for v2, 56 chars for v3)
-        if clean_address.len() != 16 && clean_address.len() != 56 {
-            return Err(TorError::InvalidOnionAddress(format!(
-                "Invalid onion address length: {}",
-                clean_address.len()
-            )));
-        }
-
         // Parse port if present
-        let (hostname, port) = if let Some((host, port_str)) = clean_address.split_once(':') {
+        let (host_part, port) = if let Some((host, port_str)) = address.split_once(':') {
             let port = port_str
                 .parse::<u16>()
                 .map_err(|_| TorError::InvalidOnionAddress("Invalid port".into()))?;
             (host.to_string(), port)
         } else {
-            (clean_address.to_string(), 80) // Default port
+            (address.to_string(), 80) // Default port
         };
+        let hostname = host_part.trim_end_matches(".onion").to_string();
+
+        // Validate format (16 chars for v2, 56 chars for v3)
+        if hostname.len() != 16 && hostname.len() != 56 {
+            return Err(TorError::InvalidOnionAddress(format!(
+                "Invalid onion address length: {}",
+                hostname.len()
+            )));
+        }
 
         let full_address = format!("{}.onion:{}", hostname, port);
 
@@ -279,15 +278,17 @@ mod tests {
 
     #[test]
     fn test_onion_address_parsing() {
-        let addr = OnionAddress::new("abcdefghijklmnopqrstuvwxyz234567.onion:8080").unwrap();
-        assert_eq!(addr.hostname, "abcdefghijklmnopqrstuvwxyz234567");
+        let hostname = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let addr = OnionAddress::new(&format!("{hostname}.onion:8080")).unwrap();
+        assert_eq!(addr.hostname, hostname);
         assert_eq!(addr.port, 8080);
         assert!(addr.full_address.contains(".onion:"));
     }
 
     #[test]
     fn test_onion_address_default_port() {
-        let addr = OnionAddress::new("abcdefghijklmnopqrstuvwxyz234567").unwrap();
+        let addr = OnionAddress::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
         assert_eq!(addr.port, 80);
     }
 
