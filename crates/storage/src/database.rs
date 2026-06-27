@@ -439,7 +439,8 @@ mod tests {
     #[test]
     fn test_database_creation() {
         let mut config = DbConfig::default();
-        config.path = std::env::temp_dir().join(format!("shadowgram-db-{}.sqlite3", current_timestamp()));
+        config.path =
+            std::env::temp_dir().join(format!("shadowgram-db-{}.sqlite3", current_timestamp()));
         let mut db = Database::new(config).unwrap();
 
         assert!(!db.is_open());
@@ -451,7 +452,8 @@ mod tests {
     #[test]
     fn test_database_schema_init() {
         let mut config = DbConfig::default();
-        config.path = std::env::temp_dir().join(format!("shadowgram-schema-{}.sqlite3", current_timestamp()));
+        config.path =
+            std::env::temp_dir().join(format!("shadowgram-schema-{}.sqlite3", current_timestamp()));
         let mut db = Database::new(config).unwrap();
         db.open().unwrap();
         let result = db.init_schema();
@@ -461,7 +463,8 @@ mod tests {
     #[test]
     fn test_database_stats() {
         let mut config = DbConfig::default();
-        config.path = std::env::temp_dir().join(format!("shadowgram-stats-{}.sqlite3", current_timestamp()));
+        config.path =
+            std::env::temp_dir().join(format!("shadowgram-stats-{}.sqlite3", current_timestamp()));
         let mut db = Database::new(config).unwrap();
         db.open().unwrap();
 

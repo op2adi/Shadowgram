@@ -3,11 +3,11 @@
 //! Full implementation of Messaging Layer Security (MLS) protocol
 //! for secure group messaging with post-compromise security.
 
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 use zeroize::Zeroize;
-use rand::RngCore;
 
 fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};

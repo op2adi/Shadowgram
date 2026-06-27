@@ -311,10 +311,7 @@ impl Identity {
     }
 
     /// Serialize identity for secure storage
-    pub fn serialize_encrypted(
-        &self,
-        encryption_key: &[u8; 32],
-    ) -> Result<Vec<u8>, IdentityError> {
+    pub fn serialize_encrypted(&self, encryption_key: &[u8; 32]) -> Result<Vec<u8>, IdentityError> {
         let secret = IdentitySecretMaterial {
             x25519_secret: self.keys.x25519_secret.to_bytes(),
             ed25519_secret: self.keys.ed25519_secret.to_bytes(),
@@ -362,11 +359,9 @@ impl Identity {
             x25519_secret: X25519Secret::from(secret.x25519_secret),
             ed25519_secret: Ed25519Secret::from_bytes(&secret.ed25519_secret),
             mlkem_decapsulation_key: DecapsulationKey::<MlKem768>::from_seed(
-                secret
-                    .mlkem_seed
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| IdentityError::InvalidFormat("Invalid ML-KEM seed length".into()))?,
+                secret.mlkem_seed.as_slice().try_into().map_err(|_| {
+                    IdentityError::InvalidFormat("Invalid ML-KEM seed length".into())
+                })?,
             ),
         };
         let derived_public = PublicIdentity::from_keys(&keys)?;

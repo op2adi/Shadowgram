@@ -209,21 +209,21 @@ impl PeerInfo {
     /// Check if peer has onion address
     pub fn has_onion_address(&self) -> bool {
         self.addresses.iter().any(|address| {
-            address.iter().any(|protocol| {
-                matches!(protocol, Protocol::Onion(_, _) | Protocol::Onion3(_))
-            }) || address.to_string().contains(".onion")
+            address
+                .iter()
+                .any(|protocol| matches!(protocol, Protocol::Onion(_, _) | Protocol::Onion3(_)))
+                || address.to_string().contains(".onion")
         })
     }
 
     /// Get first onion address if available
     pub fn onion_address(&self) -> Option<&Multiaddr> {
-        self.addresses
-            .iter()
-            .find(|address| {
-                address.iter().any(|protocol| {
-                    matches!(protocol, Protocol::Onion(_, _) | Protocol::Onion3(_))
-                }) || address.to_string().contains(".onion")
-            })
+        self.addresses.iter().find(|address| {
+            address
+                .iter()
+                .any(|protocol| matches!(protocol, Protocol::Onion(_, _) | Protocol::Onion3(_)))
+                || address.to_string().contains(".onion")
+        })
     }
 }
 
@@ -336,9 +336,10 @@ mod tests {
         assert!(!info1.has_onion_address());
 
         // Onion address
-        let addr2: Multiaddr = "/onion3/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:8080"
-            .parse()
-            .unwrap();
+        let addr2: Multiaddr =
+            "/onion3/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:8080"
+                .parse()
+                .unwrap();
         let info2 = PeerInfo::new(peer_id, vec![addr2]);
         assert!(info2.has_onion_address());
     }

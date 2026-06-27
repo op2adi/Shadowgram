@@ -100,7 +100,7 @@ impl AeadCipher {
         // Encrypt with payload struct
         let payload = Payload {
             msg: plaintext,
-            aad: &[],
+            aad: _associated_data,
         };
         let mut ciphertext = cipher
             .encrypt(chacha_nonce, payload)
@@ -145,7 +145,13 @@ impl AeadCipher {
         full_ciphertext.extend_from_slice(tag);
 
         cipher
-            .decrypt(chacha_nonce, full_ciphertext.as_slice())
+            .decrypt(
+                chacha_nonce,
+                Payload {
+                    msg: full_ciphertext.as_slice(),
+                    aad: _associated_data,
+                },
+            )
             .map_err(|_| CipherError::AuthenticationFailed)
     }
 
@@ -163,7 +169,7 @@ impl AeadCipher {
 
         let payload = Payload {
             msg: plaintext,
-            aad: &[],
+            aad: _associated_data,
         };
         let nonce_array = GenericArray::clone_from_slice(nonce);
         let mut ciphertext = cipher
@@ -199,7 +205,13 @@ impl AeadCipher {
 
         let nonce_array = GenericArray::clone_from_slice(nonce);
         cipher
-            .decrypt(&nonce_array, full_ciphertext.as_slice())
+            .decrypt(
+                &nonce_array,
+                Payload {
+                    msg: full_ciphertext.as_slice(),
+                    aad: _associated_data,
+                },
+            )
             .map_err(|_| CipherError::AuthenticationFailed)
     }
 
@@ -304,5 +316,19 @@ mod tests {
         let nonce2 = AeadCipher::generate_nonce();
 
         assert_ne!(nonce1, nonce2);
+    }
+
+    #[test]
+    fn test_aad_is_authenticated() {
+        let key = [7u8; 32];
+        let nonce = [9u8; 12];
+        let plaintext = b"authenticated data matters";
+        let aad = b"context-a";
+
+        let (ciphertext, tag) = AeadCipher::encrypt_chacha20(&key, &nonce, plaintext, aad).unwrap();
+
+        let result = AeadCipher::decrypt_chacha20(&key, &nonce, &ciphertext, &tag, b"context-b");
+
+        assert!(matches!(result, Err(CipherError::AuthenticationFailed)));
     }
 }

@@ -373,12 +373,32 @@ impl MessageHeader {
         let mut dh_public = [0u8; 32];
         dh_public.copy_from_slice(&data[0..32]);
 
-        let message_number = u64::from_le_bytes(data[32..40].try_into().unwrap());
-        let previous_chain_length = u32::from_le_bytes(data[40..44].try_into().unwrap());
-        let ratchet_level = u32::from_le_bytes(data[44..48].try_into().unwrap());
+        let message_number = u64::from_le_bytes(
+            data[32..40]
+                .try_into()
+                .map_err(|_| MessageError::InvalidFormat("Missing message number".into()))?,
+        );
+        let previous_chain_length =
+            u32::from_le_bytes(data[40..44].try_into().map_err(|_| {
+                MessageError::InvalidFormat("Missing previous chain length".into())
+            })?);
+        let ratchet_level = u32::from_le_bytes(
+            data[44..48]
+                .try_into()
+                .map_err(|_| MessageError::InvalidFormat("Missing ratchet level".into()))?,
+        );
 
         let aad = if data.len() > 48 {
-            let aad_len = u32::from_le_bytes(data[48..52].try_into().unwrap()) as usize;
+            if data.len() < 52 {
+                return Err(MessageError::InvalidFormat(
+                    "AAD length prefix is truncated".into(),
+                ));
+            }
+            let aad_len = u32::from_le_bytes(
+                data[48..52]
+                    .try_into()
+                    .map_err(|_| MessageError::InvalidFormat("Invalid AAD length".into()))?,
+            ) as usize;
             if data.len() < 52 + aad_len {
                 return Err(MessageError::InvalidFormat("AAD length mismatch".into()));
             }
@@ -416,6 +436,7 @@ pub enum MessageError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_message_creation() {
@@ -453,5 +474,82 @@ mod tests {
 
         assert_eq!(batch.len(), 2);
         assert!(!batch.is_empty());
+    }
+
+    proptest! {
+        #[test]
+        fn prop_message_roundtrip(
+            content in ".*",
+            conversation in ".*",
+            timestamp in any::<u64>(),
+        ) {
+            let message = Message {
+                id: "msg".to_string(),
+                conversation_id: conversation,
+                content,
+                message_type: MessageType::Text,
+                timestamp,
+                status: MessageStatus::Composed,
+                direction: MessageDirection::Outgoing,
+            };
+
+            let bytes = message.serialize().unwrap();
+            let decoded = Message::deserialize(&bytes).unwrap();
+            prop_assert_eq!(decoded.content, message.content);
+            prop_assert_eq!(decoded.conversation_id, message.conversation_id);
+            prop_assert_eq!(decoded.timestamp, message.timestamp);
+        }
+
+        #[test]
+        fn prop_message_header_roundtrip(
+            dh_public in prop::array::uniform32(any::<u8>()),
+            message_number in any::<u64>(),
+            previous_chain_length in any::<u32>(),
+            ratchet_level in any::<u32>(),
+            aad in proptest::collection::vec(any::<u8>(), 0..128),
+        ) {
+            let mut header = MessageHeader::new(dh_public, message_number, previous_chain_length);
+            header.ratchet_level = ratchet_level;
+            header.aad = aad.clone();
+
+            let bytes = header.serialize();
+            let decoded = MessageHeader::deserialize(&bytes).unwrap();
+
+            prop_assert_eq!(decoded.dh_public, header.dh_public);
+            prop_assert_eq!(decoded.message_number, header.message_number);
+            prop_assert_eq!(decoded.previous_chain_length, header.previous_chain_length);
+            prop_assert_eq!(decoded.ratchet_level, header.ratchet_level);
+            prop_assert_eq!(decoded.aad, aad);
+        }
+
+        #[test]
+        fn prop_message_header_parser_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+            let _ = MessageHeader::deserialize(&data);
+        }
+
+        #[test]
+        fn prop_message_envelope_roundtrip(
+            sender in proptest::collection::vec(any::<u8>(), 0..64),
+            conversation_id in proptest::collection::vec(any::<u8>(), 0..64),
+            sequence in any::<u64>(),
+            ciphertext in proptest::collection::vec(any::<u8>(), 0..256),
+            auth_tag in proptest::collection::vec(any::<u8>(), 0..32),
+            header in proptest::collection::vec(any::<u8>(), 0..128),
+        ) {
+            let mut envelope = MessageEnvelope::new(sender.clone(), conversation_id.clone(), sequence);
+            envelope.set_payload(ciphertext.clone(), auth_tag.clone());
+            envelope.set_header(header.clone());
+            envelope.pad_to_size(512);
+
+            let encoded = envelope.serialize().unwrap();
+            let decoded = MessageEnvelope::deserialize(&encoded).unwrap();
+
+            prop_assert_eq!(&decoded.sender, &sender);
+            prop_assert_eq!(&decoded.conversation_id, &conversation_id);
+            prop_assert_eq!(decoded.sequence, sequence);
+            prop_assert_eq!(&decoded.ciphertext, &ciphertext);
+            prop_assert_eq!(&decoded.auth_tag, &auth_tag);
+            prop_assert_eq!(&decoded.header, &header);
+        }
     }
 }

@@ -46,3 +46,6 @@ dashmap.workspace = true
 
 # Padding utils
 subtle.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

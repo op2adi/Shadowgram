@@ -287,8 +287,8 @@ mod tests {
 
     #[test]
     fn test_onion_address_default_port() {
-        let addr = OnionAddress::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-            .unwrap();
+        let addr =
+            OnionAddress::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
         assert_eq!(addr.port, 80);
     }
 

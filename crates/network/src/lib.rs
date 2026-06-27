@@ -22,8 +22,10 @@ pub use dht::{DhtConfig, DhtNode, PeerDiscovery};
 pub use mixnet::{MixnetClient, MixnetConfig};
 pub use noise::{HandshakeMessageA, HandshakeMessageB, NoiseBuilder, NoiseError, NoiseIK};
 pub use padding::{PaddedMessage, PaddingConfig};
+use rand::{rngs::OsRng, RngCore};
 pub use relay::{MultiPathRouting, RelayPool};
 pub use tor::{OnionAddress, TorError, TorTransport};
+use zeroize::Zeroize;
 
 /// Network message types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,11 +60,12 @@ pub struct NetworkEnvelope {
 
 impl NetworkEnvelope {
     pub fn new(msg_type: MessageType, payload: Vec<u8>) -> Self {
+        let timestamp = current_timestamp();
         Self {
             msg_type,
             payload,
             padding: Vec::new(),
-            timestamp: 0,
+            timestamp,
         }
     }
 
@@ -71,12 +74,13 @@ impl NetworkEnvelope {
         let current_size = self.payload.len();
         if current_size < target_size {
             self.padding = vec![0u8; target_size - current_size];
+            OsRng.fill_bytes(&mut self.padding);
         }
     }
 
     /// Serialize envelope for transport
     pub fn serialize(&self) -> Vec<u8> {
-        let mut data = Vec::new();
+        let mut data = Vec::with_capacity(1 + 8 + 8 + self.payload.len() + self.padding.len());
 
         // Type byte
         let type_byte = match self.msg_type {
@@ -88,16 +92,13 @@ impl NetworkEnvelope {
         };
         data.push(type_byte);
 
-        // Payload length (varint)
-        data.extend_from_slice(&self.payload.len().to_le_bytes());
+        let payload_len = self.payload.len() as u32;
+        let padding_len = self.padding.len() as u32;
+        data.extend_from_slice(&payload_len.to_le_bytes());
+        data.extend_from_slice(&padding_len.to_le_bytes());
 
-        // Payload
         data.extend_from_slice(&self.payload);
-
-        // Padding
         data.extend_from_slice(&self.padding);
-
-        // Timestamp
         data.extend_from_slice(&self.timestamp.to_le_bytes());
 
         data
@@ -119,38 +120,40 @@ impl NetworkEnvelope {
             _ => return Err(NetworkError::InvalidFormat("Unknown message type".into())),
         };
 
-        if data.len() < 9 {
+        if data.len() < 17 {
             return Err(NetworkError::InvalidFormat(
                 "Too short for length header".into(),
             ));
         }
 
-        let payload_len = usize::from_le_bytes(data[1..9].try_into().unwrap());
+        let payload_len = u32::from_le_bytes(
+            data[1..5]
+                .try_into()
+                .map_err(|_| NetworkError::InvalidFormat("Invalid payload length header".into()))?,
+        ) as usize;
+        let padding_len = u32::from_le_bytes(
+            data[5..9]
+                .try_into()
+                .map_err(|_| NetworkError::InvalidFormat("Invalid padding length header".into()))?,
+        ) as usize;
+        let expected_len = 1 + 4 + 4 + payload_len + padding_len + 8;
 
-        if data.len() < 9 + payload_len {
+        if data.len() != expected_len {
             return Err(NetworkError::InvalidFormat(
-                "Payload length mismatch".into(),
+                "Envelope length mismatch".into(),
             ));
         }
 
-        let payload = data[9..9 + payload_len].to_vec();
-
-        // Calculate padding
-        let total_data_len = 9 + payload_len + 8; // +8 for timestamp at end
-        let padding_len = data.len().saturating_sub(total_data_len);
-        let padding = if padding_len > 0 {
-            data[9 + payload_len..9 + payload_len + padding_len].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        // Parse timestamp from end
-        let timestamp = if data.len() >= 8 {
-            let ts_start = data.len() - 8;
-            u64::from_le_bytes(data[ts_start..].try_into().unwrap_or([0u8; 8]))
-        } else {
-            0
-        };
+        let payload_start = 9;
+        let payload_end = payload_start + payload_len;
+        let padding_end = payload_end + padding_len;
+        let payload = data[payload_start..payload_end].to_vec();
+        let padding = data[payload_end..padding_end].to_vec();
+        let timestamp = u64::from_le_bytes(
+            data[padding_end..padding_end + 8]
+                .try_into()
+                .map_err(|_| NetworkError::InvalidFormat("Invalid timestamp".into()))?,
+        );
 
         Ok(Self {
             msg_type,
@@ -158,6 +161,13 @@ impl NetworkEnvelope {
             padding,
             timestamp,
         })
+    }
+}
+
+impl Drop for NetworkEnvelope {
+    fn drop(&mut self) {
+        self.payload.zeroize();
+        self.padding.zeroize();
     }
 }
 
@@ -184,4 +194,48 @@ pub enum NetworkError {
 
     #[error("Routing failed: {0}")]
     RoutingFailed(String),
+}
+
+fn current_timestamp() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_network_envelope_roundtrip(
+            msg_type in 1u8..=5u8,
+            payload in proptest::collection::vec(any::<u8>(), 0..256),
+            padding_target in 0usize..512,
+        ) {
+            let mapped = match msg_type {
+                1 => MessageType::Handshake,
+                2 => MessageType::Ratchet,
+                3 => MessageType::Message,
+                4 => MessageType::Control,
+                _ => MessageType::Cover,
+            };
+            let mut envelope = NetworkEnvelope::new(mapped, payload.clone());
+            envelope.pad_to_constant_size(padding_target);
+            let serialized = envelope.serialize();
+            let decoded = NetworkEnvelope::deserialize(&serialized).unwrap();
+
+            prop_assert_eq!(decoded.msg_type, envelope.msg_type);
+            prop_assert_eq!(&decoded.payload, &payload);
+            prop_assert_eq!(decoded.padding.len(), envelope.padding.len());
+        }
+
+        #[test]
+        fn prop_network_envelope_parser_never_panics(data in proptest::collection::vec(any::<u8>(), 0..512)) {
+            let _ = NetworkEnvelope::deserialize(&data);
+        }
+    }
 }

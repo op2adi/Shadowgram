@@ -44,3 +44,6 @@ openmls = { version = "0.6", optional = true }
 [features]
 default = []
 groups = ["openmls"]
+
+[dev-dependencies]
+proptest.workspace = true

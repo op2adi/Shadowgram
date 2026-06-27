@@ -35,3 +35,6 @@ tracing.workspace = true
 
 # Multi-device
 threshold-secret-sharing = "0.1"
+
+[dev-dependencies]
+proptest.workspace = true

@@ -126,7 +126,6 @@ impl DiagnosticEntry {
             timestamp: now(),
         }
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
