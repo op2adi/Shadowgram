@@ -404,8 +404,8 @@ impl Client {
 
         // Install new identity
         *self.identity.write() = Some(Arc::new(new_identity));
-        // Invalidate the cached storage key so it is re-derived next call
-        *self.storage_key.write() = Some(storage_key);
+        // Invalidate cached storage key so it is re-derived on next access.
+        *self.storage_key.write() = None;
 
         Ok(new_fp)
     }

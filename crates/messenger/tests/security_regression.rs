@@ -316,21 +316,17 @@ fn relay_mailbox_offline_delivery_round_trip() {
 
     mailbox.store(env).expect("relay must accept the envelope");
 
-    // Recipient comes online and retrieves
+    // Recipient comes online and retrieves — destructive: relay clears the slot
     let retrieved = mailbox.retrieve("alice_fingerprint");
     assert_eq!(retrieved.len(), 1);
     assert_eq!(retrieved[0].ciphertext, ciphertext);
+    let _ = message_id; // no separate ACK needed; retrieve already clears the slot
 
-    // Recipient decrypts (application layer, not shown), then ACKs
-    mailbox
-        .acknowledge("alice_fingerprint", &message_id)
-        .expect("ACK must succeed");
-
-    // Relay must delete after ACK
+    // Relay slot must be empty after destructive retrieve
     assert_eq!(
         mailbox.pending_count("alice_fingerprint"),
         0,
-        "mailbox must be empty after ACK"
+        "mailbox must be empty after retrieve"
     );
 }
 

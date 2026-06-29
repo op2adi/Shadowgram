@@ -145,13 +145,19 @@ impl RelayMailbox {
 
     /// Return all non-expired envelopes for `recipient_fingerprint`.
     ///
-    /// Expired envelopes are swept lazily on each retrieval.
-    /// This call does NOT delete envelopes — the recipient must ACK each one.
+    /// Expired envelopes are swept lazily before transfer.
+    /// This call transfers ownership of the envelopes — the slot is emptied.
+    /// The caller is responsible for acknowledging successful decryption
+    /// (or re-fetching from another relay on failure).
     pub fn retrieve(&mut self, recipient_fingerprint: &str) -> Vec<MailboxEnvelope> {
         let hash = *blake3::hash(recipient_fingerprint.as_bytes()).as_bytes();
         let slot = self.store.entry(hash).or_default();
         slot.retain(|e| !e.is_expired());
-        slot.clone()
+        let envelopes = slot.split_off(0); // move without cloning
+        if slot.is_empty() {
+            self.store.remove(&hash);
+        }
+        envelopes
     }
 
     /// Delete a specific envelope after the recipient confirms decryption.
@@ -342,18 +348,19 @@ mod tests {
         assert_eq!(retrieved.len(), 1);
         assert_eq!(retrieved[0].message_id, id);
         assert_eq!(retrieved[0].ciphertext, vec![1, 2, 3]);
+        // retrieve is destructive — slot must be empty afterwards
+        assert_eq!(mailbox.pending_count("alice_fp"), 0);
     }
 
     #[test]
-    fn test_acknowledge_deletes_envelope() {
+    fn test_retrieve_is_destructive() {
         let mut mailbox = RelayMailbox::new();
-        let env = make_envelope("bob_fp", vec![42]);
-        let id = env.message_id;
-
-        mailbox.store(env).unwrap();
+        mailbox.store(make_envelope("bob_fp", vec![42])).unwrap();
         assert_eq!(mailbox.pending_count("bob_fp"), 1);
 
-        mailbox.acknowledge("bob_fp", &id).unwrap();
+        let retrieved = mailbox.retrieve("bob_fp");
+        assert_eq!(retrieved.len(), 1);
+        // Slot emptied — no separate ACK required
         assert_eq!(mailbox.pending_count("bob_fp"), 0);
     }
 
