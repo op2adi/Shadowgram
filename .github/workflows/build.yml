@@ -134,7 +134,7 @@ jobs:
           npm run tauri android init -- --ci
 
       - name: Build Android artifacts
-        run: npm run tauri android build
+        run: npm run tauri android build -- --debug
 
       - name: List Android outputs
         run: |
