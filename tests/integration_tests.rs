@@ -33,7 +33,7 @@ mod integration_tests {
         assert!(!identity.public().display_fingerprint().is_empty());
         assert_eq!(
             client.fingerprint(),
-            Some(identity.public().display_fingerprint().to_string())
+            Some(identity.public().fingerprint_full.clone())
         );
     }
 
@@ -57,8 +57,8 @@ mod integration_tests {
         let alice_identity = Identity::generate().unwrap();
         let bob_identity = Identity::generate().unwrap();
 
-        let alice_fp = alice_identity.public().display_fingerprint();
-        let bob_fp = bob_identity.public().display_fingerprint();
+        let alice_fp = &alice_identity.public().fingerprint_full;
+        let bob_fp = &bob_identity.public().fingerprint_full;
 
         // Both should have valid distinct fingerprints
         assert!(!alice_fp.is_empty());

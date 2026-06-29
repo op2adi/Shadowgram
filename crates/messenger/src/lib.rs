@@ -18,7 +18,10 @@ pub mod sync;
 pub use chat::{Chat, ChatError, ChatSession, ChatState, ChatStats};
 pub use client::{Client, ClientConfig, ClientError};
 pub use contacts::{Contact, ContactDiscovery, ContactStore, MemoryContactStore, TrustLevel};
-pub use group::{Commit, GroupError, GroupInfo, GroupMember, GroupState, MemberRole};
+pub use group::{
+    Commit, GroupChat, GroupEncryptedMessage, GroupError, GroupInfo, GroupMember, GroupState,
+    MemberRole,
+};
 pub use message::{
     Message, MessageBatch, MessageDirection, MessageEnvelope, MessageError, MessageHeader,
     MessagePriority, MessageStatus, MessageType,
