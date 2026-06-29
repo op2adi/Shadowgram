@@ -394,7 +394,7 @@ impl Transport for ObfsTransport {
     }
 
     fn is_available(&self) -> bool {
-        true
+        false // encode/decode always error; callers must not select this transport
     }
 }
 
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_websocket_transport() {
-        let transport = WebSocketTransport::new("ws://example.com".into());
+        let transport = WebSocketTransport::new("wss://example.com".into());
         let original = b"Test message";
 
         let frame = transport.encode(original).unwrap();
@@ -443,7 +443,7 @@ mod tests {
     fn test_transport_selector() {
         let mut selector = TransportSelector::new();
         selector.add_transport(DirectTransport::new());
-        selector.add_transport(WebSocketTransport::new("ws://test".into()));
+        selector.add_transport(WebSocketTransport::new("wss://test".into()));
 
         let transport = selector.select(Some(TransportType::WebSocket));
         assert!(transport.is_some());
@@ -455,7 +455,7 @@ mod tests {
     proptest! {
         #[test]
         fn prop_websocket_decoder_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
-            let transport = WebSocketTransport::new("ws://example.com".into());
+            let transport = WebSocketTransport::new("wss://example.com".into());
             let _ = transport.decode_ws(&data);
         }
 

@@ -58,6 +58,9 @@ pub enum GroupError {
 
     #[error("Member not found: {0}")]
     MemberNotFound(String),
+
+    #[error("Commit signature invalid")]
+    InvalidCommitSignature,
 }
 
 /// Group member role
@@ -435,6 +438,22 @@ impl GroupState {
             )));
         }
 
+        // Verify BLAKE3 commit signature before applying any state changes.
+        // Signature = BLAKE3(root_secret || commit.epoch || commit_type_byte)
+        // Proves the committer knew the current root secret; rejects forged commits.
+        let commit_type_byte = [commit.commit_type as u8];
+        let sig_input: Vec<u8> = self
+            .root_secret
+            .iter()
+            .chain(&commit.epoch.to_le_bytes())
+            .chain(&commit_type_byte)
+            .copied()
+            .collect();
+        let expected_sig = blake3::hash(&sig_input).as_bytes().to_vec();
+        if commit.signature != expected_sig {
+            return Err(GroupError::InvalidCommitSignature);
+        }
+
         // Apply tree updates (public keys only)
         for update in &commit.path_updates {
             if let Some(node) = self.tree.nodes.get_mut(update.node_index) {
@@ -613,8 +632,9 @@ impl GroupChat {
         &mut self,
         msg: &GroupEncryptedMessage,
     ) -> Result<Vec<u8>, GroupError> {
-        // Epoch check: only accept current epoch messages
-        // (allow current and immediately-previous epoch to handle in-flight messages)
+        // Epoch check: only accept messages from the current epoch.
+        // Messages from any other epoch (including the previous one) are rejected;
+        // senders must complete a commit before the epoch advances.
         if msg.epoch != self.state.info.epoch {
             return Err(GroupError::WrongEpoch {
                 expected: self.state.info.epoch,
