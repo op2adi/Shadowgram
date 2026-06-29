@@ -3,6 +3,7 @@
 //! SQLite with SQLCipher page-level encryption.
 
 use parking_lot::RwLock;
+use rand::RngCore;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,9 +55,18 @@ pub struct DbConfig {
 
 impl Default for DbConfig {
     fn default() -> Self {
+        // Generate a random key for the default config so that callers who
+        // use DbConfig::default() without explicitly setting a key still get
+        // a unique, unpredictable value.  In practice, callers SHOULD supply
+        // an explicit key derived from the user's master secret; the random
+        // fallback is better than a fixed constant but still loses the key on
+        // restart.  `Database::open()` refuses all-zero keys as an additional
+        // safeguard.
+        let mut key = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
         Self {
             path: PathBuf::from("shadowgram.db"),
-            encryption_key: [0xA5; 32],
+            encryption_key: key,
             page_size: 4096,
             wal_mode: true,
             pool_size: 1,
@@ -142,13 +152,87 @@ impl Database {
         self.conn.clone()
     }
 
-    /// Run initialization (create schema)
+    /// Run initialization (create schema for all migrations).
     pub fn init_schema(&self) -> Result<(), DbError> {
         let conn = self.conn.read();
-
         conn.execute_batch(include_str!("migrations/001_init.sql"))?;
-
+        conn.execute_batch(include_str!("migrations/002_relay_mailbox.sql"))?;
         Ok(())
+    }
+
+    /// Persist a pending outbound relay envelope.
+    pub fn store_pending_outbox(
+        &self,
+        message_id: &[u8; 32],
+        relay_address: &str,
+        envelope_bytes: &[u8],
+        attempts: u32,
+        retry_after: u64,
+        expires_at: u64,
+    ) -> Result<(), DbError> {
+        let conn = self.conn.read();
+        conn.execute(
+            "INSERT OR REPLACE INTO pending_outbox
+             (message_id, relay_address, envelope_bytes, attempts, retry_after, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                message_id.as_slice(),
+                relay_address,
+                envelope_bytes,
+                attempts,
+                retry_after as i64,
+                current_timestamp() as i64,
+                expires_at as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Load all non-expired pending outbox rows ordered by retry_after.
+    pub fn load_pending_outbox(&self) -> Result<Vec<PendingOutboxRow>, DbError> {
+        let conn = self.conn.read();
+        let now = current_timestamp() as i64;
+        let mut stmt = conn.prepare(
+            "SELECT message_id, relay_address, envelope_bytes, attempts, retry_after, expires_at
+             FROM pending_outbox
+             WHERE expires_at > ?1
+             ORDER BY retry_after ASC",
+        )?;
+        let rows = stmt.query_map(params![now], |r| {
+            let message_id_bytes: Vec<u8> = r.get(0)?;
+            let mut message_id = [0u8; 32];
+            message_id.copy_from_slice(&message_id_bytes[..32.min(message_id_bytes.len())]);
+            Ok(PendingOutboxRow {
+                message_id,
+                relay_address: r.get(1)?,
+                envelope_bytes: r.get(2)?,
+                attempts: r.get::<_, i64>(3)? as u32,
+                retry_after: r.get::<_, i64>(4)? as u64,
+                expires_at: r.get::<_, i64>(5)? as u64,
+            })
+        })?;
+        rows.map(|r| r.map_err(DbError::from)).collect()
+    }
+
+    /// Delete a pending outbox row (after successful delivery or expiry).
+    pub fn delete_pending_outbox(&self, message_id: &[u8; 32]) -> Result<(), DbError> {
+        let conn = self.conn.read();
+        conn.execute(
+            "DELETE FROM pending_outbox WHERE message_id = ?1",
+            params![message_id.as_slice()],
+        )?;
+        Ok(())
+    }
+
+    /// Remove all expired rows from the outbox.
+    pub fn sweep_expired_outbox(&self) -> Result<usize, DbError> {
+        let conn = self.conn.read();
+        let now = current_timestamp() as i64;
+        let n = conn.execute(
+            "DELETE FROM pending_outbox WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(n)
     }
 
     /// Store identity
@@ -161,8 +245,9 @@ impl Database {
         let conn = self.conn.read();
 
         conn.execute(
-            "INSERT OR REPLACE INTO identities (fingerprint, public_identity, encrypted_private_key, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO identities
+             (fingerprint, public_identity, encrypted_private_key, created_at, is_active)
+             VALUES (?1, ?2, ?3, ?4, 1)",
             params![
                 fingerprint,
                 public_identity,
@@ -172,6 +257,24 @@ impl Database {
         )?;
 
         Ok(())
+    }
+
+    /// Mark all existing identities as inactive (used before installing a new one).
+    pub fn deactivate_all_identities(&self) -> Result<(), DbError> {
+        let conn = self.conn.read();
+        conn.execute("UPDATE identities SET is_active = 0", [])?;
+        Ok(())
+    }
+
+    /// Check whether a fingerprint maps to an active identity.
+    pub fn is_identity_active(&self, fingerprint: &str) -> Result<bool, DbError> {
+        let conn = self.conn.read();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM identities WHERE fingerprint = ?1 AND is_active = 1",
+            params![fingerprint],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
     }
 
     /// Load identity
@@ -415,6 +518,17 @@ pub struct MessageRow {
     pub envelope: Vec<u8>,
     pub status: u8,
     pub received_at: u64,
+}
+
+/// A row from the pending_outbox table.
+#[derive(Clone)]
+pub struct PendingOutboxRow {
+    pub message_id: [u8; 32],
+    pub relay_address: String,
+    pub envelope_bytes: Vec<u8>,
+    pub attempts: u32,
+    pub retry_after: u64,
+    pub expires_at: u64,
 }
 
 /// Database statistics

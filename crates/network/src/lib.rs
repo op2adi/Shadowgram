@@ -9,6 +9,7 @@
 
 pub mod cover_traffic;
 pub mod dht;
+pub mod mailbox;
 pub mod mixnet;
 pub mod noise;
 pub mod padding;
@@ -19,6 +20,10 @@ pub mod transports;
 // Re-exports
 pub use cover_traffic::{CoverTraffic, TrafficConfig};
 pub use dht::{DhtConfig, DhtNode, PeerDiscovery};
+pub use mailbox::{
+    MailboxEnvelope, MailboxError, OutboundQueue, PendingOutbound, RelayMailbox,
+    MAILBOX_TTL_SECS, MAX_ENVELOPE_BYTES, MAX_PENDING_PER_RECIPIENT,
+};
 pub use mixnet::{MixnetClient, MixnetConfig};
 pub use noise::{HandshakeMessageA, HandshakeMessageB, NoiseBuilder, NoiseError, NoiseIK};
 pub use padding::{PaddedMessage, PaddingConfig};

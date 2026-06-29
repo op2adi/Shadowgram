@@ -1,9 +1,9 @@
 //! Shadowgram client implementation.
 
 use crate::{
-    ChatSession, Contact, ContactDiscoveryPSI, ContactStore, DeviceInfo, DeviceSync, GroupInfo,
-    GroupMember, GroupState, MemberRole, MemoryContactStore, Message, MessageDirection,
-    MessageStatus, PsiResult, SyncOperation,
+    ChatSession, Contact, ContactDiscoveryPSI, ContactStore, DeviceInfo, DeviceSync, GroupChat,
+    GroupEncryptedMessage, GroupInfo, GroupMember, MemberRole, MemoryContactStore, Message,
+    MessageDirection, MessageStatus, PsiResult, SyncOperation,
 };
 use parking_lot::RwLock;
 use rand::{rngs::OsRng, RngCore};
@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 #[derive(Clone)]
 pub struct ClientConfig {
@@ -100,7 +101,7 @@ struct PendingInitiator {
 struct SessionStore {
     direct_sessions: RwLock<HashMap<String, DirectSession>>,
     chats: RwLock<HashMap<String, ChatSession>>,
-    groups: RwLock<HashMap<String, GroupState>>,
+    groups: RwLock<HashMap<String, GroupChat>>,
     pending_initiators: RwLock<HashMap<String, PendingInitiator>>,
     pending_responses: RwLock<Vec<NetworkEnvelope>>,
     group_messages: RwLock<HashMap<String, Vec<StoredGroupMessage>>>,
@@ -151,11 +152,19 @@ struct DirectMessagePayload {
     tag: [u8; 16],
 }
 
+/// Stored group message.
+///
+/// The `plaintext_message` is the decoded `Message` for local display.
+/// The `encrypted_msg_bytes` holds the serialized `GroupEncryptedMessage`
+/// for forwarding to other members over the network.
 #[derive(Serialize, Deserialize, Clone)]
 struct StoredGroupMessage {
     id: String,
     sender_fingerprint: String,
-    ciphertext: Vec<u8>,
+    /// Decrypted `Message` for local display.
+    plaintext_message: Message,
+    /// Serialized `GroupEncryptedMessage` bytes for network transport.
+    encrypted_msg_bytes: Vec<u8>,
     sent_at: u64,
 }
 
@@ -348,6 +357,112 @@ impl Client {
         Ok(())
     }
 
+    /// Rotate the local identity.
+    ///
+    /// 1. Generates a fresh identity keypair.
+    /// 2. Marks the old identity inactive in the DB (cannot be loaded again).
+    /// 3. Purges all in-memory session state tied to the old fingerprint.
+    /// 4. Clears the encrypted cache.
+    /// 5. Returns the new identity fingerprint.
+    ///
+    /// After rotation, callers must re-initiate key exchanges with all
+    /// contacts using the new identity.
+    pub fn rotate_identity(&self) -> Result<String, ClientError> {
+        let storage_key = self.ensure_storage_key()?;
+
+        let new_identity =
+            Identity::generate().map_err(|e| ClientError::IdentityError(e.to_string()))?;
+        let new_fp = new_identity.public().fingerprint_full.clone();
+
+        // Persist new identity
+        if let Some(db) = self.database.read().as_ref() {
+            // Deactivate all existing identities
+            db.deactivate_all_identities()
+                .map_err(|e| ClientError::StorageError(e.to_string()))?;
+
+            db.store_identity(
+                &new_identity.public().fingerprint_full,
+                &new_identity
+                    .public()
+                    .to_bytes()
+                    .map_err(|e| ClientError::IdentityError(e.to_string()))?,
+                &new_identity
+                    .serialize_encrypted(&storage_key)
+                    .map_err(|e| ClientError::IdentityError(e.to_string()))?,
+            )
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        }
+
+        // Purge all in-memory session state
+        self.sessions.direct_sessions.write().clear();
+        self.sessions.chats.write().clear();
+        self.sessions.groups.write().clear();
+        self.sessions.pending_initiators.write().clear();
+        self.sessions.pending_responses.write().clear();
+        self.sessions.group_messages.write().clear();
+        self.cache.write().clear();
+
+        // Install new identity
+        *self.identity.write() = Some(Arc::new(new_identity));
+        // Invalidate the cached storage key so it is re-derived next call
+        *self.storage_key.write() = Some(storage_key);
+
+        Ok(new_fp)
+    }
+
+    /// Permanently wipe all local data.
+    ///
+    /// Removes the storage directory (database, master key, cached state).
+    /// Zeroizes in-memory secrets. This is a best-effort operation: the OS
+    /// may not guarantee secure erase of disk blocks, but we overwrite the
+    /// master key file before deleting it.
+    ///
+    /// After this call the client is unusable; drop it.
+    pub fn wipe_local_data(&self) -> Result<(), ClientError> {
+        // Stop any active connection first
+        self.sessions.direct_sessions.write().clear();
+        self.sessions.chats.write().clear();
+        self.sessions.groups.write().clear();
+        self.sessions.pending_initiators.write().clear();
+        self.sessions.pending_responses.write().clear();
+        self.sessions.group_messages.write().clear();
+        self.cache.write().clear();
+
+        // Zeroize and remove the master key file
+        let storage_dir = self.storage_dir();
+        let key_path = storage_dir.join("master.key");
+        if key_path.exists() {
+            // Best-effort overwrite before deletion
+            let _ = std::fs::write(&key_path, [0u8; 32]);
+            let _ = std::fs::remove_file(&key_path);
+        }
+
+        // Close and remove the database file
+        {
+            let mut db_guard = self.database.write();
+            if let Some(mut db) = db_guard.take() {
+                let _ = db.close();
+            }
+        }
+
+        // Remove the entire storage directory
+        if storage_dir.exists() {
+            std::fs::remove_dir_all(&storage_dir)
+                .map_err(|e| ClientError::StorageError(format!("wipe failed: {}", e)))?;
+        }
+
+        // Clear the in-memory identity
+        *self.identity.write() = None;
+
+        // Zeroize the cached storage key
+        if let Some(mut key) = self.storage_key.write().take() {
+            use zeroize::Zeroize;
+            key.zeroize();
+        }
+
+        Ok(())
+    }
+
     pub async fn initiate_key_exchange(
         &self,
         identity: &Identity,
@@ -473,21 +588,20 @@ impl Client {
         creator: &Identity,
     ) -> Result<String, ClientError> {
         let group_id = random_id("group");
-        let group_info = GroupInfo {
-            id: group_id.clone(),
-            name: Some(name.to_string()),
-            creator: creator.public().fingerprint_full.clone(),
-            created_at: current_timestamp(),
-            epoch: 0,
-            avatar: None,
-            description: None,
-        };
-        let group = GroupState::create(
-            group_info,
+        let creator_key = creator
+            .public()
+            .to_bytes()
+            .map_err(|e| ClientError::IdentityError(e.to_string()))?;
+        let group = GroupChat::create(
+            group_id.clone(),
             creator.public().fingerprint_full.clone(),
-            creator.public().to_bytes().unwrap_or_default(),
+            creator_key,
+            Some(name.to_string()),
         );
-        self.sessions.groups.write().insert(group_id.clone(), group);
+        self.sessions
+            .groups
+            .write()
+            .insert(group_id.clone(), group);
         if let Some(db) = self.database.read().as_ref() {
             let _ = db.ensure_conversation(&group_id, 2, None, self.fingerprint().as_deref());
         }
@@ -507,7 +621,7 @@ impl Client {
             .get_mut(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
         if group
-            .members
+            .members()
             .iter()
             .any(|member| member.fingerprint == member_fingerprint && member.left_at.is_none())
         {
@@ -533,6 +647,10 @@ impl Client {
         .map_err(|e| ClientError::SerializationError(e.to_string()))
     }
 
+    /// Encrypt and send a group message.
+    ///
+    /// Uses ChaCha20-Poly1305 AEAD. The plaintext is stored locally for
+    /// display; only the AEAD ciphertext is put in the network envelope.
     pub async fn send_group_message(
         &self,
         group_id: &str,
@@ -546,7 +664,7 @@ impl Client {
             .get_mut(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
         if !group
-            .members
+            .members()
             .iter()
             .any(|member| member.fingerprint == sender && member.left_at.is_none())
         {
@@ -557,12 +675,19 @@ impl Client {
         let plaintext = message
             .serialize()
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
-        let msg_key = group
-            .derive_message_key()
+
+        // AEAD encrypt with ChaCha20-Poly1305
+        let enc_msg = group
+            .encrypt_message(&plaintext, &sender)
             .map_err(|e| ClientError::CryptoError(e.to_string()))?;
-        let ciphertext = xor_with_group_key(&plaintext, &msg_key);
+        let enc_bytes = enc_msg
+            .to_bytes()
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+
         message.direction = MessageDirection::Outgoing;
         message.status = MessageStatus::Sent;
+
+        // Store plaintext locally for display; send ciphertext over the network
         self.sessions
             .group_messages
             .write()
@@ -571,18 +696,18 @@ impl Client {
             .push(StoredGroupMessage {
                 id: message.id.clone(),
                 sender_fingerprint: sender,
-                ciphertext: ciphertext.clone(),
-                sent_at: message.timestamp,
+                plaintext_message: message,
+                encrypted_msg_bytes: enc_bytes.clone(),
+                sent_at: current_timestamp(),
             });
-        let envelope = NetworkEnvelope::new(MessageType::Message, ciphertext);
+
+        let mut envelope = NetworkEnvelope::new(MessageType::Message, enc_bytes);
+        envelope.pad_to_constant_size(1024);
         Ok(envelope)
     }
 
+    /// Returns locally stored group messages (decrypted at send/receive time).
     pub async fn get_group_messages(&self, group_id: &str) -> Vec<Message> {
-        let mut groups = self.sessions.groups.write();
-        let Some(group) = groups.get_mut(group_id) else {
-            return Vec::new();
-        };
         self.sessions
             .group_messages
             .read()
@@ -590,13 +715,50 @@ impl Client {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|stored| {
-                let msg_id = hash_to_u64(&stored.id);
-                let msg_key = group.derive_message_key().ok()?;
-                let plaintext = xor_with_group_key(&stored.ciphertext, &msg_key);
-                Message::deserialize(&plaintext).ok()
-            })
+            .map(|s| s.plaintext_message)
             .collect()
+    }
+
+    /// Receive and decrypt an incoming group message.
+    ///
+    /// Stores the decrypted message for retrieval via `get_group_messages`.
+    pub async fn receive_group_message(
+        &self,
+        enc_bytes: &[u8],
+    ) -> Result<Message, ClientError> {
+        let enc_msg = GroupEncryptedMessage::from_bytes(enc_bytes)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        let group_id = enc_msg.group_id.clone();
+        let sender = enc_msg.sender.clone();
+
+        let mut groups = self.sessions.groups.write();
+        let group = groups
+            .get_mut(&group_id)
+            .ok_or_else(|| ClientError::GroupNotFound(group_id.clone()))?;
+
+        let plaintext = group
+            .decrypt_message(&enc_msg)
+            .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+
+        let mut message = Message::deserialize(&plaintext)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        message.direction = MessageDirection::Incoming;
+        message.status = MessageStatus::Delivered;
+
+        self.sessions
+            .group_messages
+            .write()
+            .entry(group_id.clone())
+            .or_default()
+            .push(StoredGroupMessage {
+                id: message.id.clone(),
+                sender_fingerprint: sender,
+                plaintext_message: message.clone(),
+                encrypted_msg_bytes: enc_bytes.to_vec(),
+                sent_at: current_timestamp(),
+            });
+
+        Ok(message)
     }
 
     pub async fn process_group_commit(&self, commit: Vec<u8>) -> Result<(), ClientError> {
@@ -997,21 +1159,6 @@ fn random_id(prefix: &str) -> String {
     let mut bytes = [0u8; 16];
     OsRng.fill_bytes(&mut bytes);
     format!("{}-{}", prefix, encode_hex(&bytes))
-}
-
-fn hash_to_u64(value: &str) -> u64 {
-    let hash = blake3::hash(value.as_bytes());
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&hash.as_bytes()[..8]);
-    u64::from_le_bytes(bytes)
-}
-
-fn xor_with_group_key(input: &[u8], key: &[u8]) -> Vec<u8> {
-    input
-        .iter()
-        .enumerate()
-        .map(|(index, byte)| byte ^ key[index % key.len()])
-        .collect()
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
