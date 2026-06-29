@@ -14,7 +14,9 @@ pub mod encrypted_cache;
 pub mod schema;
 
 // Re-exports
-pub use database::{ContactRow, Database, DbConfig, DbError, DbStats, IdentityRow, MessageRow};
+pub use database::{
+    ContactRow, Database, DbConfig, DbError, DbStats, IdentityRow, MessageRow, PendingOutboxRow,
+};
 pub use encrypted_cache::{CacheEntry, EncryptedCache};
 pub use schema::{columns, tables, SCHEMA_VERSION};
 

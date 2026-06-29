@@ -1,9 +1,9 @@
 //! Shadowgram client implementation.
 
 use crate::{
-    ChatSession, Contact, ContactDiscoveryPSI, ContactStore, DeviceInfo, DeviceSync, GroupInfo,
-    GroupMember, GroupState, MemberRole, MemoryContactStore, Message, MessageDirection,
-    MessageStatus, PsiResult, SyncOperation,
+    ChatSession, Contact, ContactDiscoveryPSI, ContactStore, DeviceInfo, DeviceSync, GroupChat,
+    GroupEncryptedMessage, GroupInfo, GroupMember, MemberRole, MemoryContactStore, Message,
+    MessageDirection, MessageStatus, PsiResult, SyncOperation,
 };
 use parking_lot::RwLock;
 use rand::{rngs::OsRng, RngCore};
@@ -17,10 +17,11 @@ use shadowgram_network::{
     dht::DhtNode, mixnet::MixnetClient, tor::TorTransport, MessageType, NetworkEnvelope,
 };
 use shadowgram_storage::{Database, DbConfig, EncryptedCache};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 #[derive(Clone)]
 pub struct ClientConfig {
@@ -86,9 +87,11 @@ pub enum ClientState {
 
 #[derive(Clone)]
 struct DirectSession {
-    key: [u8; 32],
+    send_key: [u8; 32],
+    receive_key: [u8; 32],
     conversation_id: String,
     send_counter: u64,
+    seen_incoming_sequences: HashSet<u64>,
 }
 
 struct PendingInitiator {
@@ -98,7 +101,7 @@ struct PendingInitiator {
 struct SessionStore {
     direct_sessions: RwLock<HashMap<String, DirectSession>>,
     chats: RwLock<HashMap<String, ChatSession>>,
-    groups: RwLock<HashMap<String, GroupState>>,
+    groups: RwLock<HashMap<String, GroupChat>>,
     pending_initiators: RwLock<HashMap<String, PendingInitiator>>,
     pending_responses: RwLock<Vec<NetworkEnvelope>>,
     group_messages: RwLock<HashMap<String, Vec<StoredGroupMessage>>>,
@@ -149,11 +152,19 @@ struct DirectMessagePayload {
     tag: [u8; 16],
 }
 
+/// Stored group message.
+///
+/// The `plaintext_message` is the decoded `Message` for local display.
+/// The `encrypted_msg_bytes` holds the serialized `GroupEncryptedMessage`
+/// for forwarding to other members over the network.
 #[derive(Serialize, Deserialize, Clone)]
 struct StoredGroupMessage {
     id: String,
     sender_fingerprint: String,
-    ciphertext: Vec<u8>,
+    /// Decrypted `Message` for local display.
+    plaintext_message: Message,
+    /// Serialized `GroupEncryptedMessage` bytes for network transport.
+    encrypted_msg_bytes: Vec<u8>,
     sent_at: u64,
 }
 
@@ -222,7 +233,7 @@ impl Client {
         self.identity
             .read()
             .as_ref()
-            .map(|identity| identity.public().display_fingerprint().to_string())
+            .map(|identity| identity.public().fingerprint_full.clone())
     }
 
     pub fn create_identity(&self) -> Result<Arc<Identity>, ClientError> {
@@ -232,7 +243,7 @@ impl Client {
 
         if let Some(db) = self.database.read().as_ref() {
             db.store_identity(
-                identity.public().display_fingerprint(),
+                &identity.public().fingerprint_full,
                 &identity
                     .public()
                     .to_bytes()
@@ -249,7 +260,7 @@ impl Client {
         self.device_sync
             .write()
             .queue_operation(SyncOperation::IdentityUpdate {
-                new_fingerprint: identity.public().display_fingerprint().to_string(),
+                new_fingerprint: identity.public().fingerprint_full.clone(),
             });
         Ok(identity)
     }
@@ -291,7 +302,8 @@ impl Client {
             encryption_key: key,
             ..Default::default()
         };
-        let mut db = Database::new(db_config).map_err(|e| ClientError::StorageError(e.to_string()))?;
+        let mut db =
+            Database::new(db_config).map_err(|e| ClientError::StorageError(e.to_string()))?;
         db.open()
             .map_err(|e| ClientError::StorageError(e.to_string()))?;
 
@@ -345,6 +357,112 @@ impl Client {
         Ok(())
     }
 
+    /// Rotate the local identity.
+    ///
+    /// 1. Generates a fresh identity keypair.
+    /// 2. Marks the old identity inactive in the DB (cannot be loaded again).
+    /// 3. Purges all in-memory session state tied to the old fingerprint.
+    /// 4. Clears the encrypted cache.
+    /// 5. Returns the new identity fingerprint.
+    ///
+    /// After rotation, callers must re-initiate key exchanges with all
+    /// contacts using the new identity.
+    pub fn rotate_identity(&self) -> Result<String, ClientError> {
+        let storage_key = self.ensure_storage_key()?;
+
+        let new_identity =
+            Identity::generate().map_err(|e| ClientError::IdentityError(e.to_string()))?;
+        let new_fp = new_identity.public().fingerprint_full.clone();
+
+        // Persist new identity
+        if let Some(db) = self.database.read().as_ref() {
+            // Deactivate all existing identities
+            db.deactivate_all_identities()
+                .map_err(|e| ClientError::StorageError(e.to_string()))?;
+
+            db.store_identity(
+                &new_identity.public().fingerprint_full,
+                &new_identity
+                    .public()
+                    .to_bytes()
+                    .map_err(|e| ClientError::IdentityError(e.to_string()))?,
+                &new_identity
+                    .serialize_encrypted(&storage_key)
+                    .map_err(|e| ClientError::IdentityError(e.to_string()))?,
+            )
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        }
+
+        // Purge all in-memory session state
+        self.sessions.direct_sessions.write().clear();
+        self.sessions.chats.write().clear();
+        self.sessions.groups.write().clear();
+        self.sessions.pending_initiators.write().clear();
+        self.sessions.pending_responses.write().clear();
+        self.sessions.group_messages.write().clear();
+        self.cache.write().clear();
+
+        // Install new identity
+        *self.identity.write() = Some(Arc::new(new_identity));
+        // Invalidate the cached storage key so it is re-derived next call
+        *self.storage_key.write() = Some(storage_key);
+
+        Ok(new_fp)
+    }
+
+    /// Permanently wipe all local data.
+    ///
+    /// Removes the storage directory (database, master key, cached state).
+    /// Zeroizes in-memory secrets. This is a best-effort operation: the OS
+    /// may not guarantee secure erase of disk blocks, but we overwrite the
+    /// master key file before deleting it.
+    ///
+    /// After this call the client is unusable; drop it.
+    pub fn wipe_local_data(&self) -> Result<(), ClientError> {
+        // Stop any active connection first
+        self.sessions.direct_sessions.write().clear();
+        self.sessions.chats.write().clear();
+        self.sessions.groups.write().clear();
+        self.sessions.pending_initiators.write().clear();
+        self.sessions.pending_responses.write().clear();
+        self.sessions.group_messages.write().clear();
+        self.cache.write().clear();
+
+        // Zeroize and remove the master key file
+        let storage_dir = self.storage_dir();
+        let key_path = storage_dir.join("master.key");
+        if key_path.exists() {
+            // Best-effort overwrite before deletion
+            let _ = std::fs::write(&key_path, [0u8; 32]);
+            let _ = std::fs::remove_file(&key_path);
+        }
+
+        // Close and remove the database file
+        {
+            let mut db_guard = self.database.write();
+            if let Some(mut db) = db_guard.take() {
+                let _ = db.close();
+            }
+        }
+
+        // Remove the entire storage directory
+        if storage_dir.exists() {
+            std::fs::remove_dir_all(&storage_dir)
+                .map_err(|e| ClientError::StorageError(format!("wipe failed: {}", e)))?;
+        }
+
+        // Clear the in-memory identity
+        *self.identity.write() = None;
+
+        // Zeroize the cached storage key
+        if let Some(mut key) = self.storage_key.write().take() {
+            use zeroize::Zeroize;
+            key.zeroize();
+        }
+
+        Ok(())
+    }
+
     pub async fn initiate_key_exchange(
         &self,
         identity: &Identity,
@@ -361,7 +479,7 @@ impl Client {
         );
 
         let payload = DirectHandshakePayload {
-            sender_fingerprint: identity.public().display_fingerprint().to_string(),
+            sender_fingerprint: identity.public().fingerprint_full.clone(),
             recipient_fingerprint: contact_fingerprint.to_string(),
             stage: HandshakeStage::Initiation,
             exchange,
@@ -387,7 +505,10 @@ impl Client {
     }
 
     pub async fn is_session_established(&self, fingerprint: &str) -> bool {
-        self.sessions.direct_sessions.read().contains_key(fingerprint)
+        self.sessions
+            .direct_sessions
+            .read()
+            .contains_key(fingerprint)
     }
 
     pub async fn send_message(
@@ -399,12 +520,12 @@ impl Client {
         let session = sessions
             .get_mut(contact_fingerprint)
             .ok_or_else(|| ClientError::SessionNotFound(contact_fingerprint.to_string()))?;
-        let nonce = sequence_nonce(session.send_counter);
+        let nonce = sequence_nonce(session.send_counter, 0x01);
         let plaintext = message
             .serialize()
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
         let (ciphertext, tag) = AeadCipher::encrypt_chacha20(
-            &session.key,
+            &session.send_key,
             &nonce,
             &plaintext,
             session.conversation_id.as_bytes(),
@@ -448,10 +569,17 @@ impl Client {
     }
 
     pub async fn get_pending_messages(&self, contact_fingerprint: &str) -> Vec<Message> {
-        let Some(session) = self.sessions.direct_sessions.read().get(contact_fingerprint).cloned() else {
+        let Some(session) = self
+            .sessions
+            .direct_sessions
+            .read()
+            .get(contact_fingerprint)
+            .cloned()
+        else {
             return Vec::new();
         };
-        self.load_messages(&session.conversation_id).unwrap_or_default()
+        self.load_messages(&session.conversation_id)
+            .unwrap_or_default()
     }
 
     pub async fn create_group(
@@ -460,21 +588,20 @@ impl Client {
         creator: &Identity,
     ) -> Result<String, ClientError> {
         let group_id = random_id("group");
-        let group_info = GroupInfo {
-            id: group_id.clone(),
-            name: Some(name.to_string()),
-            creator: creator.public().display_fingerprint().to_string(),
-            created_at: current_timestamp(),
-            epoch: 0,
-            avatar: None,
-            description: None,
-        };
-        let group = GroupState::create(
-            group_info,
-            creator.public().display_fingerprint().to_string(),
-            creator.public().to_bytes().unwrap_or_default(),
+        let creator_key = creator
+            .public()
+            .to_bytes()
+            .map_err(|e| ClientError::IdentityError(e.to_string()))?;
+        let group = GroupChat::create(
+            group_id.clone(),
+            creator.public().fingerprint_full.clone(),
+            creator_key,
+            Some(name.to_string()),
         );
-        self.sessions.groups.write().insert(group_id.clone(), group);
+        self.sessions
+            .groups
+            .write()
+            .insert(group_id.clone(), group);
         if let Some(db) = self.database.read().as_ref() {
             let _ = db.ensure_conversation(&group_id, 2, None, self.fingerprint().as_deref());
         }
@@ -494,11 +621,13 @@ impl Client {
             .get_mut(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
         if group
-            .members
+            .members()
             .iter()
             .any(|member| member.fingerprint == member_fingerprint && member.left_at.is_none())
         {
-            return Err(ClientError::MessageError("Member already exists in group".into()));
+            return Err(ClientError::MessageError(
+                "Member already exists in group".into(),
+            ));
         }
         let member = GroupMember {
             fingerprint: member_fingerprint.to_string(),
@@ -518,6 +647,10 @@ impl Client {
         .map_err(|e| ClientError::SerializationError(e.to_string()))
     }
 
+    /// Encrypt and send a group message.
+    ///
+    /// Uses ChaCha20-Poly1305 AEAD. The plaintext is stored locally for
+    /// display; only the AEAD ciphertext is put in the network envelope.
     pub async fn send_group_message(
         &self,
         group_id: &str,
@@ -531,21 +664,30 @@ impl Client {
             .get_mut(group_id)
             .ok_or_else(|| ClientError::GroupNotFound(group_id.to_string()))?;
         if !group
-            .members
+            .members()
             .iter()
             .any(|member| member.fingerprint == sender && member.left_at.is_none())
         {
-            return Err(ClientError::MessageError("Current identity is not an active group member".into()));
+            return Err(ClientError::MessageError(
+                "Current identity is not an active group member".into(),
+            ));
         }
         let plaintext = message
             .serialize()
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
-        let msg_key = group
-            .derive_message_key()
+
+        // AEAD encrypt with ChaCha20-Poly1305
+        let enc_msg = group
+            .encrypt_message(&plaintext, &sender)
             .map_err(|e| ClientError::CryptoError(e.to_string()))?;
-        let ciphertext = xor_with_group_key(&plaintext, &msg_key);
+        let enc_bytes = enc_msg
+            .to_bytes()
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+
         message.direction = MessageDirection::Outgoing;
         message.status = MessageStatus::Sent;
+
+        // Store plaintext locally for display; send ciphertext over the network
         self.sessions
             .group_messages
             .write()
@@ -554,18 +696,18 @@ impl Client {
             .push(StoredGroupMessage {
                 id: message.id.clone(),
                 sender_fingerprint: sender,
-                ciphertext: ciphertext.clone(),
-                sent_at: message.timestamp,
+                plaintext_message: message,
+                encrypted_msg_bytes: enc_bytes.clone(),
+                sent_at: current_timestamp(),
             });
-        let envelope = NetworkEnvelope::new(MessageType::Message, ciphertext);
+
+        let mut envelope = NetworkEnvelope::new(MessageType::Message, enc_bytes);
+        envelope.pad_to_constant_size(1024);
         Ok(envelope)
     }
 
+    /// Returns locally stored group messages (decrypted at send/receive time).
     pub async fn get_group_messages(&self, group_id: &str) -> Vec<Message> {
-        let mut groups = self.sessions.groups.write();
-        let Some(group) = groups.get_mut(group_id) else {
-            return Vec::new();
-        };
         self.sessions
             .group_messages
             .read()
@@ -573,13 +715,50 @@ impl Client {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|stored| {
-                let msg_id = hash_to_u64(&stored.id);
-                let msg_key = group.derive_message_key().ok()?;
-                let plaintext = xor_with_group_key(&stored.ciphertext, &msg_key);
-                Message::deserialize(&plaintext).ok()
-            })
+            .map(|s| s.plaintext_message)
             .collect()
+    }
+
+    /// Receive and decrypt an incoming group message.
+    ///
+    /// Stores the decrypted message for retrieval via `get_group_messages`.
+    pub async fn receive_group_message(
+        &self,
+        enc_bytes: &[u8],
+    ) -> Result<Message, ClientError> {
+        let enc_msg = GroupEncryptedMessage::from_bytes(enc_bytes)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        let group_id = enc_msg.group_id.clone();
+        let sender = enc_msg.sender.clone();
+
+        let mut groups = self.sessions.groups.write();
+        let group = groups
+            .get_mut(&group_id)
+            .ok_or_else(|| ClientError::GroupNotFound(group_id.clone()))?;
+
+        let plaintext = group
+            .decrypt_message(&enc_msg)
+            .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+
+        let mut message = Message::deserialize(&plaintext)
+            .map_err(|e| ClientError::SerializationError(e.to_string()))?;
+        message.direction = MessageDirection::Incoming;
+        message.status = MessageStatus::Delivered;
+
+        self.sessions
+            .group_messages
+            .write()
+            .entry(group_id.clone())
+            .or_default()
+            .push(StoredGroupMessage {
+                id: message.id.clone(),
+                sender_fingerprint: sender,
+                plaintext_message: message.clone(),
+                encrypted_msg_bytes: enc_bytes.to_vec(),
+                sent_at: current_timestamp(),
+            });
+
+        Ok(message)
     }
 
     pub async fn process_group_commit(&self, commit: Vec<u8>) -> Result<(), ClientError> {
@@ -663,7 +842,13 @@ impl Client {
                     .shared_secret()
                     .derive_keys(b"shadowgram-direct-session")
                     .map_err(|e| ClientError::CryptoError(e.to_string()))?;
-                self.establish_direct_session(&payload.sender_fingerprint, key);
+                let keys = derive_directional_session_keys(
+                    &key,
+                    SessionRole::Responder,
+                    &payload.sender_fingerprint,
+                    &payload.recipient_fingerprint,
+                );
+                self.establish_direct_session(&payload.sender_fingerprint, keys);
                 let response = DirectHandshakePayload {
                     sender_fingerprint: payload.recipient_fingerprint.clone(),
                     recipient_fingerprint: payload.sender_fingerprint.clone(),
@@ -680,7 +865,10 @@ impl Client {
                         .map_err(|e| ClientError::SerializationError(e.to_string()))?,
                 );
                 response_envelope.pad_to_constant_size(1024);
-                self.sessions.pending_responses.write().push(response_envelope);
+                self.sessions
+                    .pending_responses
+                    .write()
+                    .push(response_envelope);
                 Ok(())
             }
             HandshakeStage::Response => {
@@ -706,7 +894,13 @@ impl Client {
                 let key = shared
                     .derive_keys(b"shadowgram-direct-session")
                     .map_err(|e| ClientError::CryptoError(e.to_string()))?;
-                self.establish_direct_session(&payload.sender_fingerprint, key);
+                let keys = derive_directional_session_keys(
+                    &key,
+                    SessionRole::Initiator,
+                    &payload.recipient_fingerprint,
+                    &payload.sender_fingerprint,
+                );
+                self.establish_direct_session(&payload.sender_fingerprint, keys);
                 Ok(())
             }
         }
@@ -715,15 +909,18 @@ impl Client {
     async fn handle_incoming_message(&self, envelope: NetworkEnvelope) -> Result<(), ClientError> {
         let payload: DirectMessagePayload = serde_json::from_slice(&envelope.payload)
             .map_err(|e| ClientError::SerializationError(e.to_string()))?;
-        let session = self
-            .sessions
-            .direct_sessions
-            .read()
-            .get(&payload.sender_fingerprint)
-            .cloned()
+        let mut sessions = self.sessions.direct_sessions.write();
+        let session = sessions
+            .get_mut(&payload.sender_fingerprint)
             .ok_or_else(|| ClientError::SessionNotFound(payload.sender_fingerprint.clone()))?;
+        if !session.seen_incoming_sequences.insert(payload.sequence) {
+            return Err(ClientError::MessageError(format!(
+                "Replay detected for sequence {}",
+                payload.sequence
+            )));
+        }
         let plaintext = AeadCipher::decrypt_chacha20(
-            &session.key,
+            &session.receive_key,
             &payload.nonce,
             &payload.ciphertext,
             &payload.tag,
@@ -744,7 +941,9 @@ impl Client {
     }
 
     async fn handle_control_message(&self, _envelope: NetworkEnvelope) -> Result<(), ClientError> {
-        Ok(())
+        Err(ClientError::MessageError(
+            "Control messages are not implemented in the core client yet".into(),
+        ))
     }
 
     fn storage_dir(&self) -> PathBuf {
@@ -762,7 +961,8 @@ impl Client {
             std::fs::create_dir_all(&dir).map_err(|e| ClientError::StorageError(e.to_string()))?;
             let path = dir.join("master.key");
             if path.exists() {
-                let bytes = std::fs::read(&path).map_err(|e| ClientError::StorageError(e.to_string()))?;
+                let bytes =
+                    std::fs::read(&path).map_err(|e| ClientError::StorageError(e.to_string()))?;
                 let array: [u8; 32] = bytes
                     .try_into()
                     .map_err(|_| ClientError::StorageError("Invalid master key length".into()))?;
@@ -770,7 +970,8 @@ impl Client {
             } else {
                 let mut bytes = [0u8; 32];
                 OsRng.fill_bytes(&mut bytes);
-                std::fs::write(&path, bytes).map_err(|e| ClientError::StorageError(e.to_string()))?;
+                std::fs::write(&path, bytes)
+                    .map_err(|e| ClientError::StorageError(e.to_string()))?;
                 bytes
             }
         };
@@ -778,15 +979,17 @@ impl Client {
         Ok(key)
     }
 
-    fn establish_direct_session(&self, contact_fingerprint: &str, key: [u8; 32]) {
+    fn establish_direct_session(&self, contact_fingerprint: &str, keys: SessionKeys) {
         let our_fingerprint = self.fingerprint().unwrap_or_else(|| "unknown".into());
         let conversation_id = direct_conversation_id(&our_fingerprint, contact_fingerprint);
         self.sessions.direct_sessions.write().insert(
             contact_fingerprint.to_string(),
             DirectSession {
-                key,
+                send_key: keys.send_key,
+                receive_key: keys.receive_key,
                 conversation_id: conversation_id.clone(),
                 send_counter: 0,
+                seen_incoming_sequences: HashSet::new(),
             },
         );
         let mut chat = ChatSession::new(our_fingerprint, contact_fingerprint.to_string());
@@ -815,13 +1018,8 @@ impl Client {
         let Some(db) = db_guard.as_ref() else {
             return Ok(());
         };
-        db.ensure_conversation(
-            conversation_id,
-            1,
-            None,
-            self.fingerprint().as_deref(),
-        )
-        .map_err(|e| ClientError::StorageError(e.to_string()))?;
+        db.ensure_conversation(conversation_id, 1, None, self.fingerprint().as_deref())
+            .map_err(|e| ClientError::StorageError(e.to_string()))?;
         let storage_key = self.ensure_storage_key()?;
         let serialized = message
             .serialize()
@@ -831,7 +1029,11 @@ impl Client {
         db.store_message(
             conversation_id,
             sequence,
-            if message.direction == MessageDirection::Incoming { 1 } else { 2 },
+            if message.direction == MessageDirection::Incoming {
+                1
+            } else {
+                2
+            },
             &encrypted,
             match message.status {
                 MessageStatus::Composed => 0,
@@ -856,8 +1058,9 @@ impl Client {
         let storage_key = self.ensure_storage_key()?;
         rows.into_iter()
             .map(|row| {
-                let plaintext = decrypt_blob(&storage_key, conversation_id.as_bytes(), &row.envelope)
-                    .map_err(|e| ClientError::CryptoError(e.to_string()))?;
+                let plaintext =
+                    decrypt_blob(&storage_key, conversation_id.as_bytes(), &row.envelope)
+                        .map_err(|e| ClientError::CryptoError(e.to_string()))?;
                 Message::deserialize(&plaintext)
                     .map_err(|e| ClientError::SerializationError(e.to_string()))
             })
@@ -867,8 +1070,8 @@ impl Client {
 
 fn encrypt_blob(key: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let nonce = AeadCipher::generate_nonce();
-    let (ciphertext, tag) = AeadCipher::encrypt_chacha20(key, &nonce, plaintext, aad)
-        .map_err(|e| e.to_string())?;
+    let (ciphertext, tag) =
+        AeadCipher::encrypt_chacha20(key, &nonce, plaintext, aad).map_err(|e| e.to_string())?;
     bincode::serialize(&StoredBlob {
         nonce,
         ciphertext,
@@ -883,10 +1086,57 @@ fn decrypt_blob(key: &[u8; 32], aad: &[u8], blob: &[u8]) -> Result<Vec<u8>, Stri
         .map_err(|e| e.to_string())
 }
 
-fn sequence_nonce(sequence: u64) -> [u8; 12] {
+fn sequence_nonce(sequence: u64, direction_marker: u32) -> [u8; 12] {
     let mut nonce = [0u8; 12];
+    nonce[..4].copy_from_slice(&direction_marker.to_le_bytes());
     nonce[4..].copy_from_slice(&sequence.to_le_bytes());
     nonce
+}
+
+#[derive(Clone, Copy)]
+struct SessionKeys {
+    send_key: [u8; 32],
+    receive_key: [u8; 32],
+}
+
+#[derive(Clone, Copy)]
+enum SessionRole {
+    Initiator,
+    Responder,
+}
+
+fn derive_directional_session_keys(
+    shared_key: &[u8; 32],
+    role: SessionRole,
+    initiator_fingerprint: &str,
+    responder_fingerprint: &str,
+) -> SessionKeys {
+    let initiator_to_responder = blake3::keyed_hash(
+        shared_key,
+        format!(
+            "shadowgram-session:initiator:{}:responder:{}",
+            initiator_fingerprint, responder_fingerprint
+        )
+        .as_bytes(),
+    );
+    let responder_to_initiator = blake3::keyed_hash(
+        shared_key,
+        format!(
+            "shadowgram-session:responder:{}:initiator:{}",
+            responder_fingerprint, initiator_fingerprint
+        )
+        .as_bytes(),
+    );
+    match role {
+        SessionRole::Initiator => SessionKeys {
+            send_key: *initiator_to_responder.as_bytes(),
+            receive_key: *responder_to_initiator.as_bytes(),
+        },
+        SessionRole::Responder => SessionKeys {
+            send_key: *responder_to_initiator.as_bytes(),
+            receive_key: *initiator_to_responder.as_bytes(),
+        },
+    }
 }
 
 fn direct_conversation_id(a: &str, b: &str) -> String {
@@ -909,20 +1159,6 @@ fn random_id(prefix: &str) -> String {
     let mut bytes = [0u8; 16];
     OsRng.fill_bytes(&mut bytes);
     format!("{}-{}", prefix, encode_hex(&bytes))
-}
-
-fn hash_to_u64(value: &str) -> u64 {
-    let hash = blake3::hash(value.as_bytes());
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&hash.as_bytes()[..8]);
-    u64::from_le_bytes(bytes)
-}
-
-fn xor_with_group_key(input: &[u8], key: &[u8]) -> Vec<u8> {
-    input.iter()
-        .enumerate()
-        .map(|(index, byte)| byte ^ key[index % key.len()])
-        .collect()
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -957,7 +1193,7 @@ mod tests {
         assert!(!identity.public().display_fingerprint().is_empty());
         assert_eq!(
             client.fingerprint(),
-            Some(identity.public().display_fingerprint().to_string())
+            Some(identity.public().fingerprint_full.clone())
         );
     }
 

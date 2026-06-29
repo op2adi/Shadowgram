@@ -136,7 +136,11 @@ impl WebSocketTransport {
             return Err(TransportError::DecodingError("Frame too short".into()));
         }
 
-        let len = u32::from_be_bytes(frame[0..4].try_into().unwrap()) as usize;
+        let len = u32::from_be_bytes(
+            frame[0..4]
+                .try_into()
+                .map_err(|_| TransportError::DecodingError("Invalid frame header".into()))?,
+        ) as usize;
 
         if frame.len() < 4 + len {
             return Err(TransportError::DecodingError("Incomplete frame".into()));
@@ -376,15 +380,17 @@ impl Transport for ObfsTransport {
     }
 
     fn encode(&self, message: &[u8]) -> Result<TransportFrame, TransportError> {
-        // Placeholder
-        Ok(TransportFrame::new(
-            Bytes::copy_from_slice(message),
-            TransportType::Obfs,
+        let _ = message;
+        Err(TransportError::ProtocolError(
+            "Obfs transport is not implemented yet; refusing insecure placeholder transport".into(),
         ))
     }
 
     fn decode(&self, frame: &TransportFrame) -> Result<Bytes, TransportError> {
-        Ok(frame.data.clone())
+        let _ = frame;
+        Err(TransportError::ProtocolError(
+            "Obfs transport is not implemented yet; refusing insecure placeholder transport".into(),
+        ))
     }
 
     fn is_available(&self) -> bool {
@@ -395,6 +401,7 @@ impl Transport for ObfsTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_direct_transport() {
@@ -443,5 +450,22 @@ mod tests {
 
         let all = selector.all_available();
         assert_eq!(all.len(), 2);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_websocket_decoder_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+            let transport = WebSocketTransport::new("ws://example.com".into());
+            let _ = transport.decode_ws(&data);
+        }
+
+        #[test]
+        fn prop_http_decoder_never_panics(data in proptest::collection::vec(any::<u8>(), 0..256)) {
+            let transport = HttpPollTransport::new(
+                "https://example.com/poll".into(),
+                "https://example.com/post".into(),
+            );
+            let _ = transport.decode_http(&data);
+        }
     }
 }

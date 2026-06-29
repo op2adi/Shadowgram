@@ -21,7 +21,7 @@ pub mod threshold;
 // Re-export main types
 pub use identity::RotationPolicy;
 pub use identity::{Identity, IdentityError, IdentityKeys, PublicIdentity};
-pub use pairwise::PairwiseIdentity;
+pub use pairwise::{PairwiseIdentity, PairwisePublic, PairwiseRelationshipSecret};
 pub use qr::{QrCode, QrError};
 pub use rotation::RotationScheduler;
 pub use threshold::{SecretShare, ShareError, ThresholdConfig};
