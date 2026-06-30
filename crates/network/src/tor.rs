@@ -99,17 +99,15 @@ impl OnionAddress {
         self.full_address.clone()
     }
 
-    /// Get v3 onion address from identity key (for creating hidden services)
-    pub fn from_identity_key(_identity_bytes: &[u8]) -> Result<Self, TorError> {
-        // In production, would derive v3 onion address from Ed25519 key
-        // This requires additional crypto and is for hidden service creation
-        unimplemented!("Hidden service creation - future feature")
+    /// Get the full onion address string including port
+    pub fn address_string(&self) -> &str {
+        &self.full_address
     }
 }
 
 /// Tor transport for anonymous communication
 pub struct TorTransport {
-    /// Tor client instance
+    /// Tor client (create_bootstrapped returns Arc<TorClient> in Arti 0.43)
     client: Option<Arc<TorClient<tor_rtcompat::PreferredRuntime>>>,
 
     /// Connection timeout
@@ -136,7 +134,7 @@ impl TorTransport {
         TorClient::create_bootstrapped(config)
             .await
             .map(|client| {
-                self.client = Some(Arc::new(client));
+                self.client = Some(client);
             })
             .map_err(|e| TorError::BootstrapFailed(e.to_string()))
     }
@@ -148,7 +146,7 @@ impl TorTransport {
             .map_err(|e| TorError::BootstrapFailed(e.to_string()))?;
 
         Ok(Self {
-            client: Some(Arc::new(client)),
+            client: Some(client),
             timeout_secs: 60,
             strict_isolation: true,
         })

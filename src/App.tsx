@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import Sidebar, { type ChatSummary, type ContactSummary, type DiagnosticSummary } from './components/Sidebar';
 import ChatView, { type ChatMessage } from './components/ChatView';
 import IdentitySetup from './components/IdentitySetup';
@@ -29,7 +30,11 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticSummary[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Tracks the most recently requested chat so a slow get_messages response for
+  // a previous chat can't overwrite the messages of the chat now in view.
+  const activeChatRef = useRef<string | null>(null);
   const [clientRunning, setClientRunning] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -39,13 +44,33 @@ function App() {
   }, []);
 
   useEffect(() => {
+    activeChatRef.current = activeChatId;
     if (!activeChatId) {
       setMessages([]);
+      setLoadingMessages(false);
       return;
     }
 
+    setMessages([]);
+    setLoadingMessages(true);
     void loadMessages(activeChatId);
   }, [activeChatId]);
+
+  // Live update: backend emits this when a message arrives over the transport.
+  useEffect(() => {
+    const unlistenPromise = listen('sg://message-received', () => {
+      const current = activeChatRef.current;
+      if (current) {
+        void loadMessages(current);
+      }
+      void loadContactsAndChats(activeChatRef.current ?? undefined);
+      void loadDiagnostics();
+    });
+
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   useEffect(() => {
     if (!clientRunning) {
@@ -114,10 +139,20 @@ function App() {
         limit: 200,
         offset: 0,
       });
+      // Ignore responses for a chat the user has already navigated away from.
+      if (activeChatRef.current !== chatId) {
+        return;
+      }
       setMessages(chatMessages);
     } catch (error) {
-      setErrorMessage(renderError(error, 'Failed to load messages'));
-      setMessages([]);
+      if (activeChatRef.current === chatId) {
+        setErrorMessage(renderError(error, 'Failed to load messages'));
+        setMessages([]);
+      }
+    } finally {
+      if (activeChatRef.current === chatId) {
+        setLoadingMessages(false);
+      }
     }
   }
 
@@ -207,9 +242,9 @@ function App() {
     }
   }
 
-  async function handleSendMessage(content: string) {
+  async function handleSendMessage(content: string): Promise<boolean> {
     if (!activeChatId) {
-      return;
+      return false;
     }
 
     try {
@@ -224,12 +259,16 @@ function App() {
       if (response.error) {
         setErrorMessage(response.error);
         setStatusMessage(null);
-      } else {
-        setStatusMessage(`Message persisted for delivery at ${new Date(response.timestamp * 1000).toLocaleTimeString()}`);
-        setErrorMessage(null);
+        // Message was still persisted/queued, so treat the compose box as sent.
+        return true;
       }
+
+      setStatusMessage(`Message persisted for delivery at ${new Date(response.timestamp * 1000).toLocaleTimeString()}`);
+      setErrorMessage(null);
+      return true;
     } catch (error) {
       setErrorMessage(renderError(error, 'Failed to send message'));
+      return false;
     }
   }
 
@@ -278,6 +317,7 @@ function App() {
             selectedContact={activeContact}
             isDestinationStale={isActiveChatStale}
             messages={messages}
+            isLoadingMessages={loadingMessages}
             onSendMessage={handleSendMessage}
             onRefreshChat={handleRefreshChat}
             statusMessage={statusMessage}

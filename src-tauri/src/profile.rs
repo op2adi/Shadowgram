@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PROFILE_FILE: &str = "profile.json";
@@ -57,6 +57,9 @@ pub struct StoredIdentity {
     pub generation: u32,
     pub created_at: u64,
     pub updated_at: u64,
+    /// Our own `.onion` address once Tor has bootstrapped and published the descriptor.
+    #[serde(default)]
+    pub onion: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +71,9 @@ pub struct StoredContact {
     pub public_key_base64: Option<String>,
     pub invite_payload: String,
     pub endpoint: Option<ContactEndpoint>,
+    /// The peer's Tor onion address from their invite (e.g. `"abc.onion:7373"`).
+    #[serde(default)]
+    pub onion: Option<String>,
     pub previous_fingerprints: Vec<String>,
     pub updated_at: u64,
 }
@@ -133,11 +139,17 @@ pub struct InvitePayload {
     pub version: u8,
     pub fingerprint: String,
     pub public_key_base64: String,
+    /// Legacy LAN endpoint — retained for v1 back-compat; new peers use `onion`.
+    #[serde(default)]
     pub endpoint: Option<ContactEndpoint>,
+    /// v2+: the peer's Tor onion address including port (`"abc.onion:7373"`).
+    #[serde(default)]
+    pub onion: Option<String>,
 }
 
 pub struct ProfileStore {
     path: PathBuf,
+    dir: PathBuf,
     data: ProfileData,
 }
 
@@ -154,15 +166,20 @@ impl ProfileStore {
                 format!("Loaded profile from {}", path.display()),
             ));
             trim_diagnostics(&mut data.diagnostics);
-            return Ok(Self { path, data });
+            return Ok(Self { path, dir: profile_dir, data });
         }
 
         let mut store = Self {
             path,
+            dir: profile_dir,
             data: ProfileData::default(),
         };
         store.save()?;
         Ok(store)
+    }
+
+    pub fn profile_dir(&self) -> &Path {
+        &self.dir
     }
 
     pub fn data(&self) -> &ProfileData {
@@ -208,6 +225,7 @@ impl ProfileStore {
             fingerprint: fingerprint.clone(),
             public_key_base64: BASE64_STANDARD.encode(public_key),
             endpoint,
+            onion: None,
         };
         let identity = StoredIdentity {
             fingerprint,
@@ -218,6 +236,7 @@ impl ProfileStore {
             generation: 1,
             created_at: now(),
             updated_at: now(),
+            onion: None,
         };
         self.data.identity = Some(identity.clone());
         self.push_diag(DiagnosticEntry::info(
@@ -241,6 +260,26 @@ impl ProfileStore {
                 fingerprint: identity.fingerprint.clone(),
                 public_key_base64: identity.public_key_base64.clone(),
                 endpoint,
+                onion: identity.onion.clone(),
+            };
+            identity.invite_payload = invite_to_string(&invite)?;
+            identity.updated_at = now();
+            self.save()?;
+        }
+        Ok(())
+    }
+
+    /// Record our own `.onion` address once Tor has published it, and
+    /// regenerate the invite payload so future copies include the real address.
+    pub fn update_identity_onion(&mut self, onion: String) -> Result<(), String> {
+        if let Some(identity) = self.data.identity.as_mut() {
+            identity.onion = Some(onion.clone());
+            let invite = InvitePayload {
+                version: 2,
+                fingerprint: identity.fingerprint.clone(),
+                public_key_base64: identity.public_key_base64.clone(),
+                endpoint: None,
+                onion: Some(onion),
             };
             identity.invite_payload = invite_to_string(&invite)?;
             identity.updated_at = now();
@@ -275,6 +314,8 @@ impl ProfileStore {
             }
         }
 
+        let is_reachable = parsed.onion.is_some() || parsed.endpoint.is_some();
+
         if let Some(existing) = self
             .data
             .contacts
@@ -282,14 +323,11 @@ impl ProfileStore {
             .find(|contact| contact.fingerprint == parsed.fingerprint)
         {
             existing.alias = alias;
-            existing.status = if parsed.endpoint.is_some() {
-                "reachable".to_string()
-            } else {
-                "unreachable".to_string()
-            };
+            existing.status = if is_reachable { "reachable" } else { "unreachable" }.to_string();
             existing.public_key_base64 = Some(parsed.public_key_base64);
             existing.invite_payload = invite_payload;
             existing.endpoint = parsed.endpoint;
+            existing.onion = parsed.onion;
             existing.updated_at = now();
             let contact = existing.clone();
             self.push_diag(DiagnosticEntry::info(
@@ -304,14 +342,11 @@ impl ProfileStore {
             id: format!("contact-{}", now_nanos()),
             fingerprint: parsed.fingerprint.clone(),
             alias,
-            status: if parsed.endpoint.is_some() {
-                "reachable".to_string()
-            } else {
-                "unreachable".to_string()
-            },
+            status: if is_reachable { "reachable" } else { "unreachable" }.to_string(),
             public_key_base64: Some(parsed.public_key_base64),
             invite_payload,
             endpoint: parsed.endpoint,
+            onion: parsed.onion,
             previous_fingerprints: Vec::new(),
             updated_at: now(),
         };
@@ -437,6 +472,7 @@ pub fn parse_invite(input: &str) -> Result<InvitePayload, String> {
         fingerprint: value.to_string(),
         public_key_base64: String::new(),
         endpoint: None,
+        onion: None,
     })
 }
 
@@ -531,6 +567,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 41000,
             }),
+            onion: None,
         };
         let encoded = invite_to_string(&invite).unwrap();
         let decoded = parse_invite(&encoded).unwrap();

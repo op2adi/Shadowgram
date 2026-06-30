@@ -21,7 +21,11 @@ hex.workspace = true
 # Tor
 arti-client.workspace = true
 tor-error.workspace = true
-tor-rtcompat = "0.22"
+tor-rtcompat.workspace = true
+tor-hsservice.workspace = true
+tor-keymgr.workspace = true
+tor-cell = "0.43"
+safelog = "0.8"
 
 # DHT / P2P
 libp2p.workspace = true
