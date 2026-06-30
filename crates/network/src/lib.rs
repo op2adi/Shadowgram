@@ -10,15 +10,22 @@
 pub mod cover_traffic;
 pub mod dht;
 pub mod mailbox;
+pub mod message_transport;
 pub mod mixnet;
 pub mod noise;
 pub mod padding;
 pub mod relay;
 pub mod tor;
+pub mod tor_service;
 pub mod transports;
 
 // Re-exports
 pub use cover_traffic::{CoverTraffic, TrafficConfig};
+pub use message_transport::{
+    decode_frame, encode_frame, DirectTorTransport, MessageTransport, TransportDeliveryError,
+    FRAME_MAGIC, MAX_FRAME_BYTES,
+};
+pub use tor_service::{OnionServiceError, ShadowgramTor, ONION_PORT};
 pub use dht::{DhtConfig, DhtNode, PeerDiscovery};
 pub use mailbox::{
     MailboxEnvelope, MailboxError, OutboundQueue, PendingOutbound, RelayMailbox,

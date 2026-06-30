@@ -3,9 +3,10 @@
 use crate::profile::{
     invite_to_string, now, now_nanos, parse_invite, ContactEndpoint, DiagnosticEntry, StoredMessage,
 };
-use crate::state::AppState;
+use crate::state::{AppState, TorCommand, TorStatus};
+use crate::tor_manager;
 use crate::transport;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub fn ping() -> Result<String, String> {
@@ -271,20 +272,28 @@ pub fn send_message(
         return Err("Message content is required".to_string());
     }
 
-    let destination_fingerprint = {
+    let (destination_fingerprint, dest_onion) = {
         let store = state.store.lock();
-        store
+        let chat = store
             .data()
             .chats
             .iter()
             .find(|chat| chat.id == chat_id)
-            .map(|chat| chat.contact_fingerprint.clone())
-            .ok_or_else(|| "Chat not found".to_string())?
+            .cloned()
+            .ok_or_else(|| "Chat not found".to_string())?;
+        let contact = store
+            .data()
+            .contacts
+            .iter()
+            .find(|c| c.fingerprint == chat.contact_fingerprint)
+            .cloned()
+            .ok_or_else(|| "Contact not found for chat".to_string())?;
+        (chat.contact_fingerprint, contact.onion)
     };
 
     let message = StoredMessage {
         id: format!("msg-{}", now_nanos()),
-        content,
+        content: content.clone(),
         direction: "outgoing".to_string(),
         timestamp: now(),
         status: "queued".to_string(),
@@ -305,8 +314,28 @@ pub fn send_message(
         store.save()?;
     }
 
-    let delivery = transport::attempt_delivery(&state.store, &chat_id, &message);
-    let error = delivery.err();
+    // If Tor is running and we have a destination onion address, dispatch the
+    // send via the async Tor manager.  Otherwise fall through to the legacy
+    // plaintext transport so LAN testing still works.
+    let tor_dispatched = if let (Some(onion), Some(tx)) =
+        (dest_onion, state.tor_tx.lock().clone())
+    {
+        tx.try_send(TorCommand::SendMessage {
+            chat_id: chat_id.clone(),
+            message_id: message.id.clone(),
+            content,
+            dest_onion: onion,
+        })
+        .is_ok()
+    } else {
+        false
+    };
+
+    if !tor_dispatched {
+        // Legacy path — still useful for same-LAN testing without Tor.
+        let _ = transport::attempt_delivery(&state.store, &chat_id, &message);
+    }
+
     let status = {
         let store = state.store.lock();
         store
@@ -321,29 +350,52 @@ pub fn send_message(
         message_id: message.id,
         status,
         timestamp: message.timestamp,
-        error,
+        error: None,
     })
 }
 
+/// Start the Tor transport (bootstrap Arti + launch onion service).
+/// The first call spawns the async manager; subsequent calls are no-ops.
 #[tauri::command]
-pub fn start_client(state: State<AppState>) -> Result<bool, String> {
-    transport::start_listener(state)?;
+pub fn start_client(state: State<AppState>, app: AppHandle) -> Result<bool, String> {
+    // Guard: don't spawn twice.
+    if state.tor_tx.lock().is_some() {
+        return Ok(true);
+    }
+
+    let profile_dir = {
+        let s = state.store.lock();
+        s.profile_dir().to_path_buf()
+    };
+
+    let store = state.store.clone();
+    let tor_status = state.tor_status.clone();
+
+    let tx = state.runtime.block_on(async {
+        tor_manager::spawn(&profile_dir, store, tor_status, app).await
+    });
+
+    *state.tor_tx.lock() = Some(tx);
+    *state.client_running.lock() = true;
     Ok(true)
 }
 
 #[tauri::command]
 pub fn stop_client(state: State<AppState>) -> Result<bool, String> {
+    *state.tor_tx.lock() = None;
     transport::stop_listener(state)?;
     Ok(true)
 }
 
-fn current_endpoint(state: &State<AppState>) -> Option<ContactEndpoint> {
-    let port = *state.listener_port.lock();
-    port.map(|port| ContactEndpoint {
-        host: std::env::var("SHADOWGRAM_ADVERTISE_HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string()),
-        port,
-    })
+/// Return the current Tor bootstrap / onion-service status.
+#[tauri::command]
+pub fn get_tor_status(state: State<AppState>) -> Result<TorStatus, String> {
+    Ok(state.tor_status.lock().clone())
+}
+
+fn current_endpoint(_state: &State<AppState>) -> Option<ContactEndpoint> {
+    // No longer used — the onion address is the canonical endpoint now.
+    None
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]

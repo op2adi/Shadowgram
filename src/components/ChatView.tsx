@@ -19,7 +19,8 @@ interface ChatViewProps {
   selectedContact: ContactSummary | null;
   isDestinationStale: boolean;
   messages: ChatMessage[];
-  onSendMessage: (content: string) => Promise<void>;
+  isLoadingMessages: boolean;
+  onSendMessage: (content: string) => Promise<boolean>;
   onRefreshChat: (chatId: string) => Promise<void>;
   statusMessage: string | null;
   errorMessage: string | null;
@@ -30,20 +31,31 @@ export default function ChatView({
   selectedContact,
   isDestinationStale,
   messages,
+  isLoadingMessages,
   onSendMessage,
   onRefreshChat,
   statusMessage,
   errorMessage,
 }: ChatViewProps) {
   const [newMessage, setNewMessage] = useState('');
+  const [sending, setSending] = useState(false);
 
   async function sendMessage() {
-    if (!newMessage.trim() || !selectedChat) {
+    if (!newMessage.trim() || !selectedChat || sending) {
       return;
     }
 
-    await onSendMessage(newMessage.trim());
-    setNewMessage('');
+    setSending(true);
+    try {
+      const sent = await onSendMessage(newMessage.trim());
+      // Only clear the compose box if the send actually succeeded, so a failed
+      // message isn't silently lost.
+      if (sent) {
+        setNewMessage('');
+      }
+    } finally {
+      setSending(false);
+    }
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -91,7 +103,9 @@ export default function ChatView({
           )}
 
           <div className="messages-container">
-            {messages.length === 0 ? (
+            {isLoadingMessages && messages.length === 0 ? (
+              <p className="text-muted">Loading messages…</p>
+            ) : messages.length === 0 ? (
               <p className="text-muted">No messages yet for this chat.</p>
             ) : (
               messages.map((message) => (
@@ -132,8 +146,8 @@ export default function ChatView({
               rows={2}
               className="input"
             />
-            <button className="btn btn-primary send-button" onClick={() => void sendMessage()} disabled={!newMessage.trim()}>
-              Send
+            <button className="btn btn-primary send-button" onClick={() => void sendMessage()} disabled={!newMessage.trim() || sending}>
+              {sending ? 'Sending…' : 'Send'}
             </button>
           </div>
         </>

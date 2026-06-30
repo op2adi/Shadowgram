@@ -5,6 +5,7 @@
 mod commands;
 mod profile;
 mod state;
+mod tor_manager;
 mod transport;
 
 use tauri::{generate_context, Manager};
@@ -24,7 +25,19 @@ pub fn run() {
                 .map_err(|e| e.to_string())?
                 .join("profiles")
                 .join(profile_name);
-            let app_state = state::AppState::new(profile_dir)?;
+            let app_state = state::AppState::new(profile_dir.clone())?;
+
+            // Wire in the async Tor manager before the state is managed so
+            // the runtime handle is available for the manager's spawns.
+            let tx = app_state.runtime.block_on(async {
+                // We can't call block_on inside block_on, so we spawn the manager
+                // after Tauri finishes setup via start_tor command instead.
+                // This placeholder returns None; the channel is initialised by
+                // the `start_client` Tauri command.
+                None::<tokio::sync::mpsc::Sender<state::TorCommand>>
+            });
+            *app_state.tor_tx.lock() = tx;
+
             app.manage(app_state);
 
             println!("Shadowgram initialized successfully");
@@ -49,6 +62,7 @@ pub fn run() {
             commands::get_diagnostics,
             commands::start_client,
             commands::stop_client,
+            commands::get_tor_status,
         ])
         .run(generate_context!())
         .expect("error while running Shadowgram");

@@ -355,6 +355,7 @@ mod tests {
                     fingerprint: "sender".to_string(),
                     public_key_base64: String::new(),
                     endpoint: None,
+                    onion: None,
                 })
                 .unwrap(),
                 recipient_fingerprint: "wrong".to_string(),

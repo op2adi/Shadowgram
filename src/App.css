@@ -4,6 +4,8 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
+  min-height: 0;
 }
 
 .app-loading {
@@ -68,6 +70,9 @@
   display: flex;
   flex: 1;
   overflow: hidden;
+  /* Allow flex children (sidebar/chat) to shrink so their inner overflow:auto
+     regions actually scroll instead of stretching the layout. */
+  min-height: 0;
 }
 
 .identity-setup {
@@ -113,6 +118,7 @@
   flex-direction: column;
   border-right: 1px solid var(--border);
   background: var(--bg-secondary);
+  min-height: 0;
 }
 
 .sidebar-header,
@@ -148,6 +154,7 @@
 .sidebar-panel {
   flex: 1;
   overflow: auto;
+  min-height: 0;
 }
 
 .sidebar-list {
@@ -288,6 +295,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background:
     radial-gradient(circle at top left, rgba(88, 166, 255, 0.16), transparent 28%),
     linear-gradient(180deg, rgba(88, 166, 255, 0.05), transparent 25%),
@@ -361,11 +369,13 @@
 
 .messages-container {
   flex: 1;
-  overflow: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
+  min-height: 0;
 }
 
 .message {
@@ -460,8 +470,17 @@
   .sidebar {
     width: 100%;
     max-height: 52vh;
+    max-height: 52dvh;
     border-right: 0;
     border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+
+  /* In the stacked mobile layout the chat pane takes the remaining space and
+     its message list scrolls within it. */
+  .chat-view {
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   .chat-header,
